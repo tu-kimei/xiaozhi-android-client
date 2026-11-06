@@ -184,6 +184,8 @@ class _ChatScreenState extends State<ChatScreen> {
       websocketUrl: xiaozhiConfig.websocketUrl,
       macAddress: xiaozhiConfig.macAddress,
       token: xiaozhiConfig.token,
+      otaUrl: xiaozhiConfig.otaUrl,
+      clientId: xiaozhiConfig.clientId,
     );
 
     // 添加消息监听器
@@ -258,7 +260,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
     if (difyConfig == null) {
       if (configProvider.difyConfigs.isEmpty) {
-        throw Exception("未设置Dify配置，请先在设置中配置Dify API");
+        throw Exception("Chưa cấu hình Dify, hãy cài đặt Dify API trước");
       }
       difyConfig = configProvider.difyConfigs.first;
     }
@@ -284,7 +286,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
     if (minimaxConfig == null) {
       if (configProvider.minimaxConfigs.isEmpty) {
-        throw Exception("未设置MiniMax配置，请先在设置中配置MiniMax API");
+        throw Exception("Chưa cấu hình MiniMax, hãy cài đặt MiniMax API trước");
       }
       minimaxConfig = configProvider.minimaxConfigs.first;
     }
@@ -325,7 +327,7 @@ class _ChatScreenState extends State<ChatScreen> {
               widget.conversation.type == ConversationType.minimax)
             IconButton(
               icon: const Icon(Icons.refresh, color: Colors.black, size: 24),
-              tooltip: '开始新对话',
+              tooltip: 'Cuộc trò chuyện mới',
               onPressed: _resetConversation,
             ),
           if (widget.conversation.type == ConversationType.xiaozhi)
@@ -425,7 +427,7 @@ class _ChatScreenState extends State<ChatScreen> {
                             ],
                           ),
                           child: const Text(
-                            '语音',
+                            'Giọng nói',
                             style: TextStyle(color: Colors.grey, fontSize: 12),
                           ),
                         ),
@@ -519,7 +521,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                 ],
                               ),
                               child: Text(
-                                isMinimax ? 'MiniMax' : '文本',
+                                isMinimax ? 'MiniMax' : 'Văn bản',
                                 style: TextStyle(
                                   color: themeColor,
                                   fontSize: 12,
@@ -551,7 +553,7 @@ class _ChatScreenState extends State<ChatScreen> {
       orElse:
           () => XiaozhiConfig(
             id: '',
-            name: '未知服务',
+            name: 'Dịch vụ không rõ',
             websocketUrl: '',
             macAddress: '',
             token: '',
@@ -597,7 +599,7 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
           const SizedBox(width: 8),
           Text(
-            isConnected ? '已连接' : '未连接',
+            isConnected ? 'Đã kết nối' : 'Chưa kết nối',
             style: TextStyle(
               fontSize: 13,
               color: isConnected ? Colors.green : Colors.red,
@@ -677,7 +679,7 @@ class _ChatScreenState extends State<ChatScreen> {
         if (messages.isEmpty) {
           return Center(
             child: Text(
-              '开始新对话',
+              'Cuộc trò chuyện mới',
               style: TextStyle(color: Colors.grey.shade400, fontSize: 16),
             ),
           );
@@ -699,7 +701,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   id: 'loading',
                   conversationId: '',
                   role: MessageRole.assistant,
-                  content: '思考中...',
+                  content: 'Đang suy nghĩ...',
                   timestamp: DateTime.now(),
                 ),
                 isThinking: true,
@@ -787,7 +789,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   child: TextField(
                     controller: _textController,
                     decoration: const InputDecoration(
-                      hintText: '输入消息...',
+                      hintText: 'Nhập tin nhắn...',
                       hintStyle: TextStyle(
                         color: Color(0xFF9CA3AF),
                         fontSize: 16,
@@ -951,9 +953,9 @@ class _ChatScreenState extends State<ChatScreen> {
                       child: Text(
                         _isRecording
                             ? _isCancelling
-                                ? "松开手指，取消发送"
-                                : "松开发送，上滑取消"
-                            : "按住说话",
+                                ? "Thả tay để hủy"
+                                : "Thả để gửi, vuốt lên để hủy"
+                            : "Nhấn giữ để nói",
                         style: TextStyle(
                           color:
                               _isRecording
@@ -1048,7 +1050,7 @@ class _ChatScreenState extends State<ChatScreen> {
   void _startRecording() async {
     if (widget.conversation.type != ConversationType.xiaozhi ||
         _xiaozhiService == null) {
-      _showCustomSnackbar('语音功能仅适用于小智对话');
+      _showCustomSnackbar('Giọng nói chỉ dùng cho Xiaozhi');
       setState(() {
         _isVoiceInputMode = false;
       });
@@ -1063,7 +1065,7 @@ class _ChatScreenState extends State<ChatScreen> {
       await _xiaozhiService!.startListening();
     } catch (e) {
       print('开始录音失败: $e');
-      _showCustomSnackbar('无法开始录音: ${e.toString()}');
+      _showCustomSnackbar('Không thể ghi âm: ${e.toString()}');
       setState(() {
         _isRecording = false;
         _isVoiceInputMode = false;
@@ -1090,7 +1092,7 @@ class _ChatScreenState extends State<ChatScreen> {
       _scrollToBottom();
     } catch (e) {
       print('停止录音失败: $e');
-      _showCustomSnackbar('语音发送失败: ${e.toString()}');
+      _showCustomSnackbar('Gửi giọng nói thất bại: ${e.toString()}');
 
       // 出错时关闭语音输入模式
       setState(() {
@@ -1117,7 +1119,7 @@ class _ChatScreenState extends State<ChatScreen> {
       await _xiaozhiService?.abortListening();
 
       // 使用自定义的拟物化提示，显示在顶部且带有圆角
-      _showCustomSnackbar('已取消发送');
+      _showCustomSnackbar('Đã hủy gửi');
     } catch (e) {
       print('取消录音失败: $e');
     }
@@ -1152,7 +1154,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   void _resetConversation() async {
     // 给用户一个清晰的提示
-    _showCustomSnackbar('正在开始新对话...');
+    _showCustomSnackbar('Đang bắt đầu trò chuyện mới...');
 
     final conversationProvider = Provider.of<ConversationProvider>(
       context,
@@ -1166,10 +1168,10 @@ class _ChatScreenState extends State<ChatScreen> {
       await conversationProvider.addMessage(
         conversationId: widget.conversation.id,
         role: MessageRole.system,
-        content: '--- 开始新对话 ---',
+        content: '--- Cuộc trò chuyện mới ---',
       );
 
-      _showCustomSnackbar('已开始新对话');
+      _showCustomSnackbar('Đã bắt đầu trò chuyện mới');
     } else if (_difyService != null) {
       // 使用会话的ID作为sessionId，确保与发送消息时使用相同的标识符
       final sessionId = widget.conversation.id;
@@ -1181,12 +1183,12 @@ class _ChatScreenState extends State<ChatScreen> {
       await conversationProvider.addMessage(
         conversationId: widget.conversation.id,
         role: MessageRole.system,
-        content: '--- 开始新对话 ---',
+        content: '--- Cuộc trò chuyện mới ---',
       );
 
-      _showCustomSnackbar('已开始新对话');
+      _showCustomSnackbar('Đã bắt đầu trò chuyện mới');
     } else {
-      _showCustomSnackbar('配置未设置，无法重置对话');
+      _showCustomSnackbar('Chưa cấu hình, không thể đặt lại');
     }
   }
 
@@ -1223,7 +1225,7 @@ class _ChatScreenState extends State<ChatScreen> {
         }
 
         if (_minimaxService == null) {
-          throw Exception("未设置MiniMax配置，请先在设置中配置MiniMax API");
+          throw Exception("Chưa cấu hình MiniMax, hãy cài đặt MiniMax API trước");
         }
 
         final sessionId = widget.conversation.id;
@@ -1247,7 +1249,7 @@ class _ChatScreenState extends State<ChatScreen> {
         }
 
         if (_difyService == null) {
-          throw Exception("未设置Dify配置，请先在设置中配置Dify API");
+          throw Exception("Chưa cấu hình Dify, hãy cài đặt Dify API trước");
         }
 
         // 使用会话的ID作为sessionId，使每次请求保持相同的对话上下文
@@ -1280,7 +1282,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
           // 如果重连失败，提示用户
           if (!_xiaozhiService!.isConnected) {
-            throw Exception("无法连接到小智服务，请检查网络或服务配置");
+            throw Exception("Không thể kết nối Xiaozhi, hãy kiểm tra mạng hoặc cấu hình");
           }
 
           // 刷新UI显示连接状态
@@ -1299,7 +1301,7 @@ class _ChatScreenState extends State<ChatScreen> {
       await conversationProvider.addMessage(
         conversationId: widget.conversation.id,
         role: MessageRole.assistant,
-        content: '发生错误: ${e.toString()}',
+        content: 'Đã xảy ra lỗi: ${e.toString()}',
       );
     } finally {
       if (!mounted) return;
@@ -1481,7 +1483,7 @@ class _ChatScreenState extends State<ChatScreen> {
                         ),
                       ),
                       title: const Text(
-                        '从相册选择',
+                        'Chọn từ thư viện',
                         style: TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w600,
@@ -1489,7 +1491,7 @@ class _ChatScreenState extends State<ChatScreen> {
                         ),
                       ),
                       subtitle: Text(
-                        '选择已有照片',
+                        'Chọn ảnh có sẵn',
                         style: TextStyle(
                           fontSize: 13,
                           color: Colors.grey.shade600,
@@ -1554,7 +1556,7 @@ class _ChatScreenState extends State<ChatScreen> {
                         ),
                       ),
                       title: const Text(
-                        '拍照',
+                        'Chụp ảnh',
                         style: TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w600,
@@ -1562,7 +1564,7 @@ class _ChatScreenState extends State<ChatScreen> {
                         ),
                       ),
                       subtitle: Text(
-                        '拍摄新照片',
+                        'Chụp ảnh mới',
                         style: TextStyle(
                           fontSize: 13,
                           color: Colors.grey.shade600,
@@ -1589,7 +1591,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _pickImage(bool fromGallery) async {
     if (widget.conversation.type != ConversationType.dify) {
-      _showCustomSnackbar('图片上传功能仅适用于Dify对话');
+      _showCustomSnackbar('Tải ảnh chỉ dùng cho Dify');
       return;
     }
 
@@ -1603,7 +1605,7 @@ class _ChatScreenState extends State<ChatScreen> {
       }
 
       if (_difyService == null) {
-        throw Exception("未设置Dify配置，请先在设置中配置Dify API");
+        throw Exception("Chưa cấu hình Dify, hãy cài đặt Dify API trước");
       }
 
       final ImagePicker picker = ImagePicker();
@@ -1614,7 +1616,7 @@ class _ChatScreenState extends State<ChatScreen> {
       );
 
       if (pickedFile == null) {
-        _showCustomSnackbar('已取消选择');
+        _showCustomSnackbar('Đã hủy chọn');
         setState(() {
           _isLoading = false;
         });
@@ -1652,7 +1654,7 @@ class _ChatScreenState extends State<ChatScreen> {
       await conversationProvider.addMessage(
         conversationId: widget.conversation.id,
         role: MessageRole.user,
-        content: "[图片上传中...]",
+        content: "[Đang tải ảnh lên...]",
         isImage: true,
         imageLocalPath: localPath,
       );
@@ -1675,7 +1677,7 @@ class _ChatScreenState extends State<ChatScreen> {
           imageLocalPath: localPath,
         );
 
-        final textPrompt = "分析这张图片";
+        final textPrompt = "Phân tích hình ảnh này";
         final chatResponse = await _difyService!.sendMessage(
           textPrompt,
           sessionId: sessionId,
@@ -1688,10 +1690,10 @@ class _ChatScreenState extends State<ChatScreen> {
           content: chatResponse,
         );
       } else {
-        throw Exception("上传成功但服务器未返回文件ID: $response");
+        throw Exception("Tải lên thành công nhưng máy chủ không trả về ID tệp: $response");
       }
 
-      _showCustomSnackbar('图片上传成功');
+      _showCustomSnackbar('Tải ảnh lên thành công');
     } catch (e) {
       print('图片上传失败: $e');
 
@@ -1702,10 +1704,10 @@ class _ChatScreenState extends State<ChatScreen> {
       await conversationProvider.addMessage(
         conversationId: widget.conversation.id,
         role: MessageRole.assistant,
-        content: '图片上传失败: ${e.toString()}',
+        content: 'Tải ảnh lên thất bại: ${e.toString()}',
       );
 
-      _showCustomSnackbar('图片上传失败: ${e.toString()}');
+      _showCustomSnackbar('Tải ảnh lên thất bại: ${e.toString()}');
     } finally {
       setState(() {
         _isLoading = false;

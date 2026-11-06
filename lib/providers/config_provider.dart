@@ -57,7 +57,7 @@ class ConfigProvider extends ChangeNotifier {
       // 添加ID和名称，转换为新格式
       final updatedConfig = DifyConfig(
         id: const Uuid().v4(),
-        name: "默认Dify",
+        name: "Dify mặc định",
         apiUrl: oldConfig.apiUrl,
         apiKey: oldConfig.apiKey,
       );
@@ -110,6 +110,24 @@ class ConfigProvider extends ChangeNotifier {
     _xiaozhiConfigs.add(newConfig);
     await _saveConfigs();
     notifyListeners();
+  }
+
+  // 添加通过OTA激活的小智配置（如 xiaozhi.me 官方服务），WebSocket地址和Token在激活后填入
+  Future<XiaozhiConfig> addXiaozhiOtaConfig(String name, String otaUrl) async {
+    final newConfig = XiaozhiConfig(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      name: name,
+      websocketUrl: '',
+      macAddress: await _getDeviceMacAddress(),
+      token: '',
+      otaUrl: otaUrl,
+      clientId: const Uuid().v4(),
+    );
+
+    _xiaozhiConfigs.add(newConfig);
+    await _saveConfigs();
+    notifyListeners();
+    return newConfig;
   }
 
   Future<void> updateXiaozhiConfig(XiaozhiConfig updatedConfig) async {
@@ -202,7 +220,7 @@ class ConfigProvider extends ChangeNotifier {
   // 向后兼容的旧方法，设置第一个Dify配置
   Future<void> setDifyConfig(String apiKey, String apiUrl) async {
     if (_difyConfigs.isEmpty) {
-      await addDifyConfig("默认Dify", apiKey, apiUrl);
+      await addDifyConfig("Dify mặc định", apiKey, apiUrl);
     } else {
       final updated = _difyConfigs.first.copyWith(
         apiKey: apiKey,

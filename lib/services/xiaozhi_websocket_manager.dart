@@ -28,6 +28,7 @@ class XiaozhiWebSocketManager {
   WebSocketChannel? _channel;
   String? _serverUrl;
   String? _deviceId;
+  String? _clientId;
   String? _token;
   bool _enableToken;
 
@@ -37,8 +38,12 @@ class XiaozhiWebSocketManager {
   StreamSubscription? _streamSubscription;
 
   /// 构造函数
-  XiaozhiWebSocketManager({required String deviceId, bool enableToken = false})
-    : _deviceId = deviceId,
+  XiaozhiWebSocketManager({
+    required String deviceId,
+    String? clientId,
+    bool enableToken = false,
+  }) : _deviceId = deviceId,
+       _clientId = (clientId == null || clientId.isEmpty) ? deviceId : clientId,
       _enableToken = enableToken;
 
   /// 添加事件监听器
@@ -55,7 +60,8 @@ class XiaozhiWebSocketManager {
 
   /// 分发事件到所有监听器
   void _dispatchEvent(XiaozhiEvent event) {
-    for (var listener in _listeners) {
+    // 复制一份再遍历，监听器可能在回调中移除自己
+    for (var listener in List.of(_listeners)) {
       listener(event);
     }
   }
@@ -64,7 +70,7 @@ class XiaozhiWebSocketManager {
   Future<void> connect(String url, String token) async {
     if (url.isEmpty) {
       _dispatchEvent(
-        XiaozhiEvent(type: XiaozhiEventType.error, data: "WebSocket地址不能为空"),
+        XiaozhiEvent(type: XiaozhiEventType.error, data: "Địa chỉ WebSocket không được để trống"),
       );
       return;
     }
@@ -95,7 +101,7 @@ class XiaozhiWebSocketManager {
         // 创建headers
         Map<String, dynamic> headers = {
           'device-id': _deviceId ?? '',
-          'client-id': _deviceId ?? '',
+          'client-id': _clientId ?? '',
           'protocol-version': '1',
         };
 
@@ -158,7 +164,7 @@ class XiaozhiWebSocketManager {
     } catch (e) {
       print('$TAG: 连接失败: $e');
       _dispatchEvent(
-        XiaozhiEvent(type: XiaozhiEventType.error, data: "创建WebSocket失败: $e"),
+        XiaozhiEvent(type: XiaozhiEventType.error, data: "Tạo WebSocket thất bại: $e"),
       );
     }
   }

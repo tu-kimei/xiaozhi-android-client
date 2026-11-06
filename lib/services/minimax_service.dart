@@ -72,7 +72,7 @@ class MiniMaxService {
         final choices = data['choices'] as List<dynamic>?;
         if (choices != null && choices.isNotEmpty) {
           String content =
-              choices[0]['message']?['content'] as String? ?? '无回复';
+              choices[0]['message']?['content'] as String? ?? 'Không có phản hồi';
 
           // Strip thinking tags if present (MiniMax M2.5+ may include them)
           content = _stripThinkingTags(content);
@@ -82,15 +82,15 @@ class MiniMaxService {
 
           return content;
         }
-        return '无回复';
+        return 'Không có phản hồi';
       } else {
         throw Exception(
-          'API 请求失败: ${response.statusCode}, 响应: ${response.body}',
+          'Yêu cầu API thất bại: ${response.statusCode}, phản hồi: ${response.body}',
         );
       }
     } catch (e) {
       print('MiniMaxService 错误: $e');
-      throw Exception('发送消息失败: $e');
+      throw Exception('Gửi tin nhắn thất bại: $e');
     }
   }
 
@@ -146,7 +146,7 @@ class MiniMaxService {
         final responseBody = await streamedResponse.stream.bytesToString();
         print('MiniMaxService Stream: 错误响应体 = $responseBody');
         throw Exception(
-          'API 请求失败: ${streamedResponse.statusCode}, 响应: $responseBody',
+          'Yêu cầu API thất bại: ${streamedResponse.statusCode}, phản hồi: $responseBody',
         );
       }
 
@@ -188,7 +188,7 @@ class MiniMaxService {
       history.add({'role': 'assistant', 'content': cleanContent});
     } catch (e) {
       print('MiniMaxService Stream 错误: $e');
-      yield '【服务响应异常】';
+      yield '[Lỗi phản hồi dịch vụ]';
     }
   }
 

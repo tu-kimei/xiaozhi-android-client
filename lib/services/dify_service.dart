@@ -241,7 +241,7 @@ class DifyService {
           await _saveConversationMap(); // 保存更改到本地存储
         }
 
-        return data['answer'] ?? '无回复';
+        return data['answer'] ?? 'Không có phản hồi';
       } else {
         // 特殊处理404 Conversation Not Exists错误
         if (response.statusCode == 404 &&
@@ -255,12 +255,12 @@ class DifyService {
         }
 
         throw Exception(
-          'API 请求失败: ${response.statusCode}, 响应: ${response.body}',
+          'Yêu cầu API thất bại: ${response.statusCode}, phản hồi: ${response.body}',
         );
       }
     } catch (e) {
       print('DifyService 错误: $e');
-      throw Exception('发送消息失败: $e');
+      throw Exception('Gửi tin nhắn thất bại: $e');
     }
   }
 
@@ -361,12 +361,12 @@ class DifyService {
           yield response;
           return;
         }
-        throw Exception('API 请求失败: 404, 响应: $responseBody');
+        throw Exception('Yêu cầu API thất bại: 404, phản hồi: $responseBody');
       } else if (streamedResponse.statusCode != 200) {
         final responseBody = await streamedResponse.stream.bytesToString();
         print('DifyService Stream: 错误响应体 = $responseBody');
         throw Exception(
-          'API 请求失败: ${streamedResponse.statusCode}, 响应: $responseBody',
+          'Yêu cầu API thất bại: ${streamedResponse.statusCode}, phản hồi: $responseBody',
         );
       }
 
@@ -421,7 +421,7 @@ class DifyService {
       }
     } catch (e) {
       print('DifyService Stream 错误: $e');
-      yield "【服务响应异常】";
+      yield "[Lỗi phản hồi dịch vụ]";
     }
   }
 
@@ -461,7 +461,7 @@ class DifyService {
 
       // 检查文件是否存在
       if (!await file.exists()) {
-        throw Exception('文件不存在: ${file.path}');
+        throw Exception('Tệp không tồn tại: ${file.path}');
       }
 
       // 创建multipart请求
@@ -507,11 +507,11 @@ class DifyService {
         final data = jsonDecode(response.body);
         return data;
       } else {
-        throw Exception('文件上传失败: ${response.statusCode}, 响应: ${response.body}');
+        throw Exception('Tải tệp lên thất bại: ${response.statusCode}, phản hồi: ${response.body}');
       }
     } catch (e) {
       print('DifyService 文件上传错误: $e');
-      throw Exception('上传文件失败: $e');
+      throw Exception('Tải tệp lên thất bại: $e');
     }
   }
 }

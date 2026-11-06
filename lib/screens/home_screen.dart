@@ -46,7 +46,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 ? null
                 : AppBar(
                   title: const Text(
-                    '消息',
+                    'Tin nhắn',
                     style: TextStyle(
                       fontWeight: FontWeight.bold,
                       fontSize: 28,
@@ -225,7 +225,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           ),
                         ),
                       ),
-                      label: '消息',
+                      label: 'Tin nhắn',
                     ),
                     BottomNavigationBarItem(
                       icon: Material(
@@ -257,7 +257,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           ),
                         ),
                       ),
-                      label: '发现',
+                      label: 'Khám phá',
                     ),
                   ],
                 ),
@@ -295,7 +295,7 @@ class _HomeScreenState extends State<HomeScreen> {
           child: TextField(
             focusNode: _searchFocusNode,
             decoration: InputDecoration(
-              hintText: '搜索对话',
+              hintText: 'Tìm hội thoại',
               hintStyle: TextStyle(color: Colors.grey.shade400, fontSize: 16),
               prefixIcon: Container(
                 padding: const EdgeInsets.all(12),
@@ -350,7 +350,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   bottom: 8,
                 ),
                 child: Text(
-                  '置顶对话',
+                  'Ghim hội thoại',
                   style: TextStyle(
                     fontWeight: FontWeight.w500,
                     color: Colors.grey,
@@ -379,7 +379,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   bottom: 8,
                 ),
                 child: const Text(
-                  '全部对话',
+                  'Tất cả hội thoại',
                   style: TextStyle(
                     fontWeight: FontWeight.w500,
                     color: Colors.grey,
@@ -428,7 +428,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                       const SizedBox(height: 24),
                       Text(
-                        '没有对话',
+                        'Chưa có hội thoại',
                         style: TextStyle(
                           fontSize: 18,
                           fontWeight: FontWeight.w500,
@@ -470,7 +470,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
                             const SizedBox(width: 8),
                             Text(
-                              '点击 + 创建新对话',
+                              'Nhấn + để tạo hội thoại mới',
                               style: TextStyle(
                                 fontSize: 14,
                                 color: Colors.grey.shade500,
@@ -503,7 +503,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ScaffoldMessenger.of(context).clearSnackBars();
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('${conversation.title} 已删除'),
+            content: Text('Đã xóa ${conversation.title}'),
             backgroundColor: Colors.grey.shade800,
             behavior: SnackBarBehavior.floating,
             duration: const Duration(seconds: 3),
@@ -512,7 +512,7 @@ class _HomeScreenState extends State<HomeScreen> {
               borderRadius: BorderRadius.circular(10),
             ),
             action: SnackBarAction(
-              label: '撤销',
+              label: 'Hoàn tác',
               textColor: Colors.white,
               onPressed: () {
                 // 恢复被删除的对话
@@ -626,7 +626,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                       ),
                       title: Text(
-                        conversation.isPinned ? '取消置顶' : '置顶对话',
+                        conversation.isPinned ? 'Bỏ ghim' : 'Ghim hội thoại',
                         style: const TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w600,
@@ -693,7 +693,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                       ),
                       title: const Text(
-                        '删除对话',
+                        'Xóa hội thoại',
                         style: TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w600,
@@ -711,7 +711,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         ).deleteConversation(conversation.id);
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
-                            content: Text('${conversation.title} 已删除'),
+                            content: Text('Đã xóa ${conversation.title}'),
                             backgroundColor: Colors.grey.shade800,
                             behavior: SnackBarBehavior.floating,
                             shape: RoundedRectangleBorder(

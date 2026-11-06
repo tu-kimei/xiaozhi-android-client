@@ -15,7 +15,7 @@ class XiaozhiConfigSelectorScreen extends StatelessWidget {
     
     return Scaffold(
       appBar: AppBar(
-        title: const Text('选择小智服务'),
+        title: const Text('Chọn dịch vụ Xiaozhi'),
       ),
       body: ListView.builder(
         padding: const EdgeInsets.all(16),
@@ -52,7 +52,7 @@ class XiaozhiConfigSelectorScreen extends StatelessWidget {
   void _createXiaozhiConversation(BuildContext context, XiaozhiConfig config) async {
     final conversation = await Provider.of<ConversationProvider>(context, listen: false)
         .createConversation(
-          title: '与 ${config.name} 的对话',
+          title: 'Chat với ${config.name}',
           type: ConversationType.xiaozhi,
           configId: config.id,
         );

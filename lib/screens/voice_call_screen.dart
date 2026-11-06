@@ -28,7 +28,7 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
   late XiaozhiService _xiaozhiService;
   bool _isConnected = false;
   bool _isSpeaking = false;
-  String _statusText = '正在连接...';
+  String _statusText = 'Đang kết nối...';
   Timer? _callTimer;
   Duration _callDuration = Duration.zero;
   bool _serverReady = false;
@@ -77,6 +77,8 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
       websocketUrl: widget.xiaozhiConfig.websocketUrl,
       macAddress: widget.xiaozhiConfig.macAddress,
       token: widget.xiaozhiConfig.token,
+      otaUrl: widget.xiaozhiConfig.otaUrl,
+      clientId: widget.xiaozhiConfig.clientId,
       sessionId: widget.conversation.id,
     );
 
@@ -126,7 +128,7 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
 
   void _connectToVoiceService() async {
     setState(() {
-      _statusText = '正在准备...';
+      _statusText = 'Đang chuẩn bị...';
     });
 
     try {
@@ -134,14 +136,14 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
       await _xiaozhiService.switchToVoiceCallMode();
 
       setState(() {
-        _statusText = '已连接';
+        _statusText = 'Đã kết nối';
         _isConnected = true;
       });
 
       // 显示连接成功的提示
       if (mounted) {
         _showCustomSnackbar(
-          message: '已进入语音通话模式',
+          message: 'Đã vào chế độ gọi thoại',
           icon: Icons.check_circle,
           iconColor: Colors.greenAccent,
         );
@@ -153,21 +155,21 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
       Provider.of<ConversationProvider>(context, listen: false).addMessage(
         conversationId: widget.conversation.id,
         role: MessageRole.assistant,
-        content: '语音通话已开始',
+        content: 'Cuộc gọi thoại đã bắt đầu',
       );
 
       // 直接开始录音
       _startSpeaking();
     } catch (e) {
       setState(() {
-        _statusText = '准备失败';
+        _statusText = 'Chuẩn bị thất bại';
         _isConnected = false;
       });
       print('准备失败: $e');
 
       if (mounted) {
         _showCustomSnackbar(
-          message: '进入语音通话模式失败: $e',
+          message: 'Vào chế độ gọi thoại thất bại: $e',
           icon: Icons.error_outline,
           iconColor: Colors.redAccent,
         );
@@ -220,7 +222,7 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
             .then((_) {
               if (mounted) {
                 _showCustomSnackbar(
-                  message: '正在录音...',
+                  message: 'Đang ghi âm...',
                   icon: Icons.mic,
                   iconColor: Colors.greenAccent,
                 );
@@ -235,7 +237,7 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
                 });
 
                 _showCustomSnackbar(
-                  message: '开始录音失败: $e',
+                  message: 'Ghi âm thất bại: $e',
                   icon: Icons.error,
                   iconColor: Colors.redAccent,
                 );
@@ -250,7 +252,7 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
 
         if (mounted) {
           _showCustomSnackbar(
-            message: '开始录音失败: $e',
+            message: 'Ghi âm thất bại: $e',
             icon: Icons.error,
             iconColor: Colors.redAccent,
           );
@@ -266,7 +268,7 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
 
     if (mounted) {
       _showCustomSnackbar(
-        message: '已发送打断信号',
+        message: 'Đã gửi tín hiệu ngắt',
         icon: Icons.pan_tool,
         iconColor: Colors.orangeAccent,
       );
@@ -437,7 +439,7 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
                       ),
                       const SizedBox(width: 8),
                       Text(
-                        _isSpeaking ? '$_statusText (正在录音)' : _statusText,
+                        _isSpeaking ? '$_statusText (đang ghi âm)' : _statusText,
                         style: TextStyle(
                           color: _isConnected ? Colors.green : Colors.red,
                           fontSize: 16,
@@ -451,7 +453,7 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
 
                 // 通话时长
                 Text(
-                  '通话时长: ${_formatDuration(_callDuration)}',
+                  'Thời gian gọi: ${_formatDuration(_callDuration)}',
                   style: TextStyle(
                     color: Colors.white.withOpacity(0.8),
                     fontSize: 16,

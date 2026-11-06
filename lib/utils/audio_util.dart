@@ -72,14 +72,14 @@ class AudioUtil {
 
       if (statuses[Permission.microphone] != PermissionStatus.granted) {
         print('$TAG: 麦克风权限被拒绝');
-        throw Exception('需要麦克风权限');
+        throw Exception('Cần quyền micro');
       }
     } else {
       // iOS/其他平台只请求麦克风权限
       final status = await Permission.microphone.request();
       if (status != PermissionStatus.granted) {
         print('$TAG: 麦克风权限被拒绝');
-        throw Exception('需要麦克风权限');
+        throw Exception('Cần quyền micro');
       }
     }
 

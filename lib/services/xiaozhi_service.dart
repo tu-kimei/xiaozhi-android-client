@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter_sound/flutter_sound.dart';
 import '../services/xiaozhi_websocket_manager.dart';
+import '../services/xiaozhi_ota_service.dart';
 import '../utils/device_util.dart';
 import '../utils/audio_util.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
@@ -44,9 +45,11 @@ class XiaozhiService {
   // 单例实例
   static XiaozhiService? _instance;
 
-  final String websocketUrl;
+  String websocketUrl;
   final String macAddress;
-  final String token;
+  String token;
+  final String otaUrl;
+  final String clientId;
   String? _sessionId; // 会话ID将由服务器提供
 
   XiaozhiWebSocketManager? _webSocketManager;
@@ -64,12 +67,27 @@ class XiaozhiService {
     required String websocketUrl,
     required String macAddress,
     required String token,
+    String otaUrl = '',
+    String clientId = '',
     String? sessionId,
   }) {
+    // 配置变化时重建实例，避免沿用旧的服务器地址/Token
+    final old = _instance;
+    if (old != null &&
+        (old.macAddress != macAddress ||
+            old.otaUrl != otaUrl ||
+            old.clientId != clientId ||
+            (otaUrl.isEmpty &&
+                (old.websocketUrl != websocketUrl || old.token != token)))) {
+      old.disconnect();
+      _instance = null;
+    }
     _instance ??= XiaozhiService._internal(
       websocketUrl: websocketUrl,
       macAddress: macAddress,
       token: token,
+      otaUrl: otaUrl,
+      clientId: clientId,
       sessionId: sessionId,
     );
     return _instance!;
@@ -80,6 +98,8 @@ class XiaozhiService {
     required this.websocketUrl,
     required this.macAddress,
     required this.token,
+    this.otaUrl = '',
+    this.clientId = '',
     String? sessionId,
   }) {
     _sessionId = sessionId;
@@ -140,6 +160,7 @@ class XiaozhiService {
     // 初始化WebSocket管理器，启用 token
     _webSocketManager = XiaozhiWebSocketManager(
       deviceId: macAddress,
+      clientId: clientId,
       enableToken: true,
     );
 
@@ -170,8 +191,30 @@ class XiaozhiService {
 
   /// 分发事件到所有监听器
   void _dispatchEvent(XiaozhiServiceEvent event) {
-    for (var listener in _listeners) {
+    // 复制一份再遍历，监听器可能在回调中移除自己
+    for (var listener in List.of(_listeners)) {
       listener(event);
+    }
+  }
+
+  /// 通过OTA获取最新的WebSocket地址和Token（仅OTA模式）
+  Future<void> _refreshFromOta() async {
+    if (otaUrl.isEmpty) return;
+    final result = await XiaozhiOtaService.checkVersion(
+      otaUrl: otaUrl,
+      macAddress: macAddress,
+      clientId: clientId,
+    );
+    if (result.needsActivation) {
+      throw Exception(
+        'Thiết bị chưa được kích hoạt. Vào Cài đặt > Xiaozhi để kích hoạt (mã ${result.activationCode})',
+      );
+    }
+    if (result.websocketUrl != null && result.websocketUrl!.isNotEmpty) {
+      websocketUrl = result.websocketUrl!;
+    }
+    if (result.websocketToken != null) {
+      token = result.websocketToken!;
     }
   }
 
@@ -181,10 +224,12 @@ class XiaozhiService {
 
     try {
       print('$TAG: 开始连接服务器...');
+      await _refreshFromOta();
 
       // 创建WebSocket管理器
       _webSocketManager = XiaozhiWebSocketManager(
         deviceId: macAddress,
+        clientId: clientId,
         enableToken: true,
       );
 
@@ -196,7 +241,7 @@ class XiaozhiService {
     } catch (e) {
       print('$TAG: 连接失败: $e');
       _dispatchEvent(
-        XiaozhiServiceEvent(XiaozhiServiceEventType.error, '连接小智服务失败: $e'),
+        XiaozhiServiceEvent(XiaozhiServiceEventType.error, 'Kết nối Xiaozhi thất bại: $e'),
       );
     }
   }
@@ -271,7 +316,7 @@ class XiaozhiService {
       final timeoutTimer = Timer(const Duration(seconds: 15), () {
         if (!completer.isCompleted) {
           print('$TAG: 请求超时，15秒内没有收到响应');
-          completer.completeError('请求超时');
+          completer.completeError('Hết thời gian chờ');
           removeListener(onceListener);
         }
       });
@@ -302,7 +347,7 @@ class XiaozhiService {
         if (status != PermissionStatus.granted) {
           print('$TAG: 麦克风权限被拒绝');
           _dispatchEvent(
-            XiaozhiServiceEvent(XiaozhiServiceEventType.error, '麦克风权限被拒绝'),
+            XiaozhiServiceEvent(XiaozhiServiceEventType.error, 'Quyền micro bị từ chối'),
           );
           return;
         }
@@ -313,6 +358,8 @@ class XiaozhiService {
       await AudioUtil.initRecorder();
       await AudioUtil.initPlayer();
 
+      await _refreshFromOta();
+
       print('$TAG: 正在连接 $websocketUrl');
       print('$TAG: 设备ID: $macAddress');
       print('$TAG: Token启用: true');
@@ -321,6 +368,7 @@ class XiaozhiService {
       // 使用 WebSocketManager 连接
       _webSocketManager = XiaozhiWebSocketManager(
         deviceId: macAddress,
+        clientId: clientId,
         enableToken: true,
       );
       _webSocketManager!.addListener(_onWebSocketEvent);
@@ -396,7 +444,7 @@ class XiaozhiService {
     } catch (e) {
       print('$TAG: 发送listen消息失败: $e');
       _dispatchEvent(
-        XiaozhiServiceEvent(XiaozhiServiceEventType.error, '发送listen消息失败: $e'),
+        XiaozhiServiceEvent(XiaozhiServiceEventType.error, 'Gửi tin nhắn listen thất bại: $e'),
       );
     }
   }
@@ -411,7 +459,7 @@ class XiaozhiService {
         await Future.delayed(const Duration(milliseconds: 500));
         if (_sessionId == null) {
           print('$TAG: 会话ID仍然为空，放弃开始监听');
-          throw Exception('会话ID为空，无法开始录音');
+          throw Exception('Thiếu ID phiên, không thể ghi âm');
         }
       }
 
@@ -425,7 +473,7 @@ class XiaozhiService {
           if (result != PermissionStatus.granted) {
             print('$TAG: 麦克风权限被拒绝');
             _dispatchEvent(
-              XiaozhiServiceEvent(XiaozhiServiceEventType.error, '麦克风权限被拒绝'),
+              XiaozhiServiceEvent(XiaozhiServiceEventType.error, 'Quyền micro bị từ chối'),
             );
             return;
           }
@@ -439,7 +487,7 @@ class XiaozhiService {
         if (status.isDenied) {
           print('$TAG: 麦克风权限被拒绝');
           _dispatchEvent(
-            XiaozhiServiceEvent(XiaozhiServiceEventType.error, '麦克风权限被拒绝'),
+            XiaozhiServiceEvent(XiaozhiServiceEventType.error, 'Quyền micro bị từ chối'),
           );
           return;
         }
@@ -465,7 +513,7 @@ class XiaozhiService {
       print('$TAG: 已发送开始监听消息 (语音通话模式)');
     } catch (e) {
       print('$TAG: 开始监听失败: $e');
-      throw Exception('开始语音输入失败: $e');
+      throw Exception('Bắt đầu nhập giọng nói thất bại: $e');
     }
   }
 
@@ -648,7 +696,7 @@ class XiaozhiService {
             _dispatchEvent(
               XiaozhiServiceEvent(
                 XiaozhiServiceEventType.textMessage,
-                '表情: $emotion',
+                'Cảm xúc: $emotion',
               ),
             );
           }
@@ -751,7 +799,7 @@ class XiaozhiService {
       });
     } catch (e) {
       print('$TAG: 开始监听失败: $e');
-      throw Exception('开始语音输入失败: $e');
+      throw Exception('Bắt đầu nhập giọng nói thất bại: $e');
     }
   }
 

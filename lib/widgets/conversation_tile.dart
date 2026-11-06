@@ -109,7 +109,7 @@ class ConversationTile extends StatelessWidget {
 
   Widget _buildTypeTag(BuildContext context) {
     final bool isDify = conversation.type == ConversationType.dify;
-    String label = isDify ? '文本' : '语音';
+    String label = isDify ? 'Văn bản' : 'Giọng nói';
 
     // 如果有配置ID且不为空，则显示配置名称
     if (conversation.configId.isNotEmpty) {
@@ -180,9 +180,9 @@ class ConversationTile extends StatelessWidget {
     final difference = now.difference(dateTime);
 
     if (difference.inDays > 0 && difference.inDays <= 1) {
-      return '昨天';
+      return 'Hôm qua';
     } else if (difference.inDays > 1 && difference.inDays <= 7) {
-      return '周${_getWeekday(dateTime.weekday)}';
+      return '${_getWeekday(dateTime.weekday)}';
     } else {
       // 当天显示时间
       final hour = dateTime.hour.toString().padLeft(2, '0');
@@ -194,19 +194,19 @@ class ConversationTile extends StatelessWidget {
   String _getWeekday(int weekday) {
     switch (weekday) {
       case 1:
-        return '一';
+        return 'T2';
       case 2:
-        return '二';
+        return 'T3';
       case 3:
-        return '三';
+        return 'T4';
       case 4:
-        return '四';
+        return 'T5';
       case 5:
-        return '五';
+        return 'T6';
       case 6:
-        return '六';
+        return 'T7';
       case 7:
-        return '日';
+        return 'CN';
       default:
         return '';
     }

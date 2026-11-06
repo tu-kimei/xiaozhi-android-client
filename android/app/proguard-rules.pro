@@ -24,3 +24,6 @@
     public static int d(...);
     public static int i(...);
 } 
+
+# Flutter engine references Play Core (deferred components) which this app doesn't use
+-dontwarn com.google.android.play.core.**
