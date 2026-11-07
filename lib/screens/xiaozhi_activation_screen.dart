@@ -26,6 +26,7 @@ class _XiaozhiActivationScreenState extends State<XiaozhiActivationScreen> {
   String? _error;
   Timer? _pollTimer;
   bool _polling = false;
+  final TextEditingController _tokenController = TextEditingController();
 
   @override
   void initState() {
@@ -36,7 +37,29 @@ class _XiaozhiActivationScreenState extends State<XiaozhiActivationScreen> {
   @override
   void dispose() {
     _pollTimer?.cancel();
+    _tokenController.dispose();
     super.dispose();
+  }
+
+  Future<void> _saveManualToken() async {
+    final token = _tokenController.text.trim();
+    if (token.isEmpty) return;
+
+    try {
+      await Provider.of<ConfigProvider>(context, listen: false)
+          .updateXiaozhiConfig(
+        widget.config.copyWith(
+          websocketUrl: 'wss://api.tenclass.net/xiaozhi/v1/',
+          token: token,
+        ),
+      );
+      if (!mounted) return;
+      setState(() => _state = _ActivationState.success);
+      await Future.delayed(const Duration(milliseconds: 1500));
+      if (mounted) Navigator.pop(context, true);
+    } catch (e) {
+      _showError(e);
+    }
   }
 
   Future<void> _checkVersion() async {
@@ -194,6 +217,47 @@ class _XiaozhiActivationScreenState extends State<XiaozhiActivationScreen> {
                 SizedBox(width: 8),
                 Text('Đang chờ kích hoạt...', style: TextStyle(fontSize: 12)),
               ],
+            ),
+            const SizedBox(height: 16),
+            const Divider(),
+            const SizedBox(height: 8),
+            const Text(
+              'Hoặc nhập token thủ công:',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 13, color: Colors.grey),
+            ),
+            const SizedBox(height: 8),
+            Container(
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.grey.shade300),
+              ),
+              child: TextField(
+                controller: _tokenController,
+                decoration: InputDecoration(
+                  hintText: 'Nhập token từ xiaozhi.me',
+                  hintStyle: TextStyle(color: Colors.grey.shade400),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 14,
+                  ),
+                  border: InputBorder.none,
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            ElevatedButton(
+              onPressed: _saveManualToken,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.black,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              child: const Text('Nhập token thủ công'),
             ),
           ],
         );

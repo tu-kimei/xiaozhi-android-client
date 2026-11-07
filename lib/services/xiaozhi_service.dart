@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter_sound/flutter_sound.dart';
 import '../services/xiaozhi_websocket_manager.dart';
+import '../services/xiaozhi_mqtt_manager.dart';
 import '../services/xiaozhi_ota_service.dart';
 import '../utils/device_util.dart';
 import '../utils/audio_util.dart';
@@ -40,7 +41,7 @@ typedef MessageListener = void Function(dynamic message);
 /// 小智服务
 class XiaozhiService {
   static const String TAG = "XiaozhiService";
-  static const String DEFAULT_SERVER = "wss://ws.xiaozhi.ai";
+  static const String DEFAULT_SERVER = "wss://api.tenclass.net/xiaozhi/v1/";
 
   // 单例实例
   static XiaozhiService? _instance;
@@ -53,6 +54,8 @@ class XiaozhiService {
   String? _sessionId; // 会话ID将由服务器提供
 
   XiaozhiWebSocketManager? _webSocketManager;
+  XiaozhiMqttManager? _mqttManager;
+  XiaozhiOtaResult? _otaResult;
   bool _isConnected = false;
   bool _isMuted = false;
   final List<XiaozhiServiceListener> _listeners = [];
@@ -157,16 +160,6 @@ class XiaozhiService {
     // 使用配置中的MAC地址作为设备ID
     print('$TAG: 初始化完成，使用MAC地址作为设备ID: $macAddress');
 
-    // 初始化WebSocket管理器，启用 token
-    _webSocketManager = XiaozhiWebSocketManager(
-      deviceId: macAddress,
-      clientId: clientId,
-      enableToken: true,
-    );
-
-    // 添加WebSocket事件监听
-    _webSocketManager!.addListener(_onWebSocketEvent);
-
     // 初始化音频工具
     await AudioUtil.initRecorder();
     await AudioUtil.initPlayer();
@@ -197,9 +190,36 @@ class XiaozhiService {
     }
   }
 
-  /// 通过OTA获取最新的WebSocket地址和Token（仅OTA模式）
+  /// 当前控制通道是否已连接（MQTT 或 WebSocket）
+  bool get _channelConnected =>
+      (_mqttManager?.isConnected ?? false) ||
+      (_webSocketManager?.isConnected ?? false);
+
+  /// 通过当前控制通道发送 JSON 消息
+  void _sendControlMessage(Map<String, dynamic> message) {
+    final encoded = jsonEncode(message);
+    if (_mqttManager != null) {
+      _mqttManager!.sendMessage(encoded);
+    } else {
+      _webSocketManager?.sendMessage(encoded);
+    }
+  }
+
+  /// 发送音频分片（MQTT 模式下音频走 UDP，暂不处理）
+  void _sendAudioChunk(List<int> data) {
+    if (_mqttManager != null) {
+      _mqttManager!.sendBinaryMessage(data);
+    } else {
+      _webSocketManager?.sendBinaryMessage(data);
+    }
+  }
+
+  /// 通过OTA获取最新的连接配置（仅OTA模式）
   Future<void> _refreshFromOta() async {
-    if (otaUrl.isEmpty) return;
+    if (otaUrl.isEmpty) {
+      _otaResult = null;
+      return;
+    }
     final result = await XiaozhiOtaService.checkVersion(
       otaUrl: otaUrl,
       macAddress: macAddress,
@@ -210,12 +230,51 @@ class XiaozhiService {
         'Thiết bị chưa được kích hoạt. Vào Cài đặt > Xiaozhi để kích hoạt (mã ${result.activationCode})',
       );
     }
+    _otaResult = result;
     if (result.websocketUrl != null && result.websocketUrl!.isNotEmpty) {
       websocketUrl = result.websocketUrl!;
     }
     if (result.websocketToken != null) {
       token = result.websocketToken!;
     }
+  }
+
+  /// 是否使用 MQTT 控制通道
+  bool get _useMqtt => otaUrl.isNotEmpty && (_otaResult?.hasMqtt ?? false);
+
+  /// 建立 MQTT 连接
+  Future<void> _connectMqtt() async {
+    final result = _otaResult!;
+    await _mqttManager?.disconnect();
+
+    final manager = XiaozhiMqttManager(
+      deviceId: macAddress,
+      clientId: clientId,
+    );
+    manager.addListener(_onWebSocketEvent);
+    _mqttManager = manager;
+
+    await manager.connect(
+      endpoint: result.mqttEndpoint!,
+      mqttClientId: result.mqttClientId!,
+      username: result.mqttUsername!,
+      password: result.mqttPassword!,
+      publishTopic: result.mqttPublishTopic,
+      subscribeTopic: result.mqttSubscribeTopic,
+    );
+  }
+
+  /// 建立 WebSocket 连接
+  Future<void> _connectWebSocket() async {
+    await _webSocketManager?.disconnect();
+
+    _webSocketManager = XiaozhiWebSocketManager(
+      deviceId: macAddress,
+      clientId: clientId,
+      enableToken: true,
+    );
+    _webSocketManager!.addListener(_onWebSocketEvent);
+    await _webSocketManager!.connect(websocketUrl, token);
   }
 
   /// 连接到小智服务
@@ -226,30 +285,26 @@ class XiaozhiService {
       print('$TAG: 开始连接服务器...');
       await _refreshFromOta();
 
-      // 创建WebSocket管理器
-      _webSocketManager = XiaozhiWebSocketManager(
-        deviceId: macAddress,
-        clientId: clientId,
-        enableToken: true,
-      );
-
-      // 添加WebSocket事件监听
-      _webSocketManager!.addListener(_onWebSocketEvent);
-
-      // 连接WebSocket
-      await _webSocketManager!.connect(websocketUrl, token);
+      if (_useMqtt) {
+        print('$TAG: 使用 MQTT + UDP 通道');
+        await _connectMqtt();
+      } else {
+        print('$TAG: 使用 WebSocket 通道');
+        await _connectWebSocket();
+      }
     } catch (e) {
       print('$TAG: 连接失败: $e');
       _dispatchEvent(
-        XiaozhiServiceEvent(XiaozhiServiceEventType.error, 'Kết nối Xiaozhi thất bại: $e'),
+        XiaozhiServiceEvent(
+          XiaozhiServiceEventType.error,
+          'Kết nối Xiaozhi thất bại: $e',
+        ),
       );
     }
   }
 
   /// 断开小智服务连接
   Future<void> disconnect() async {
-    if (!_isConnected || _webSocketManager == null) return;
-
     try {
       // 取消音频流订阅
       await _audioStreamSubscription?.cancel();
@@ -260,9 +315,14 @@ class XiaozhiService {
         await AudioUtil.stopRecording();
       }
 
-      // 断开WebSocket连接
-      await _webSocketManager!.disconnect();
+      // 断开 MQTT 连接
+      await _mqttManager?.disconnect();
+      _mqttManager = null;
+
+      // 断开 WebSocket 连接
+      await _webSocketManager?.disconnect();
       _webSocketManager = null;
+
       _isConnected = false;
     } catch (e) {
       print('$TAG: 断开连接失败: $e');
@@ -271,7 +331,7 @@ class XiaozhiService {
 
   /// 发送文本消息
   Future<String> sendTextMessage(String message) async {
-    if (!_isConnected && _webSocketManager == null) {
+    if (!isConnected) {
       await connect();
     }
 
@@ -310,7 +370,11 @@ class XiaozhiService {
 
       // 发送文本请求
       print('$TAG: 发送文本请求: $message');
-      _webSocketManager!.sendTextRequest(message);
+      if (_mqttManager != null) {
+        _mqttManager!.sendTextRequest(message);
+      } else {
+        _webSocketManager!.sendTextRequest(message);
+      }
 
       // 设置超时，15秒比10秒更宽松一些
       final timeoutTimer = Timer(const Duration(seconds: 15), () {
@@ -347,7 +411,10 @@ class XiaozhiService {
         if (status != PermissionStatus.granted) {
           print('$TAG: 麦克风权限被拒绝');
           _dispatchEvent(
-            XiaozhiServiceEvent(XiaozhiServiceEventType.error, 'Quyền micro bị từ chối'),
+            XiaozhiServiceEvent(
+              XiaozhiServiceEventType.error,
+              'Quyền micro bị từ chối',
+            ),
           );
           return;
         }
@@ -360,19 +427,16 @@ class XiaozhiService {
 
       await _refreshFromOta();
 
-      print('$TAG: 正在连接 $websocketUrl');
-      print('$TAG: 设备ID: $macAddress');
-      print('$TAG: Token启用: true');
-      print('$TAG: 使用Token: $token');
-
-      // 使用 WebSocketManager 连接
-      _webSocketManager = XiaozhiWebSocketManager(
-        deviceId: macAddress,
-        clientId: clientId,
-        enableToken: true,
-      );
-      _webSocketManager!.addListener(_onWebSocketEvent);
-      await _webSocketManager!.connect(websocketUrl, token);
+      if (_useMqtt) {
+        print('$TAG: 使用 MQTT 通道（语音音频需 UDP，暂未实现）');
+        await _connectMqtt();
+      } else {
+        print('$TAG: 正在连接 $websocketUrl');
+        print('$TAG: 设备ID: $macAddress');
+        print('$TAG: Token启用: true');
+        print('$TAG: 使用Token: $token');
+        await _connectWebSocket();
+      }
     } catch (e) {
       print('$TAG: 连接失败: $e');
       rethrow;
@@ -381,7 +445,7 @@ class XiaozhiService {
 
   /// 结束语音通话
   Future<void> disconnectVoiceCall() async {
-    if (_webSocketManager == null) return;
+    if (_mqttManager == null && _webSocketManager == null) return;
 
     try {
       // 停止音频录制
@@ -408,7 +472,7 @@ class XiaozhiService {
   Future<void> startSpeaking() async {
     try {
       final message = {'type': 'speak', 'state': 'start', 'mode': 'auto'};
-      _webSocketManager?.sendMessage(jsonEncode(message));
+      _sendControlMessage(message);
       print('$TAG: 已发送开始说话消息');
     } catch (e) {
       print('$TAG: 开始说话失败: $e');
@@ -419,7 +483,7 @@ class XiaozhiService {
   Future<void> stopSpeaking() async {
     try {
       final message = {'type': 'speak', 'state': 'stop', 'mode': 'auto'};
-      _webSocketManager?.sendMessage(jsonEncode(message));
+      _sendControlMessage(message);
       print('$TAG: 已发送停止说话消息');
     } catch (e) {
       print('$TAG: 停止说话失败: $e');
@@ -435,7 +499,7 @@ class XiaozhiService {
         'state': 'start',
         'mode': 'auto',
       };
-      _webSocketManager?.sendMessage(jsonEncode(listenMessage));
+      _sendControlMessage(listenMessage);
       print('$TAG: 已发送listen消息');
 
       // 开始录音
@@ -444,7 +508,10 @@ class XiaozhiService {
     } catch (e) {
       print('$TAG: 发送listen消息失败: $e');
       _dispatchEvent(
-        XiaozhiServiceEvent(XiaozhiServiceEventType.error, 'Gửi tin nhắn listen thất bại: $e'),
+        XiaozhiServiceEvent(
+          XiaozhiServiceEventType.error,
+          'Gửi tin nhắn listen thất bại: $e',
+        ),
       );
     }
   }
@@ -473,7 +540,10 @@ class XiaozhiService {
           if (result != PermissionStatus.granted) {
             print('$TAG: 麦克风权限被拒绝');
             _dispatchEvent(
-              XiaozhiServiceEvent(XiaozhiServiceEventType.error, 'Quyền micro bị từ chối'),
+              XiaozhiServiceEvent(
+                XiaozhiServiceEventType.error,
+                'Quyền micro bị từ chối',
+              ),
             );
             return;
           }
@@ -487,7 +557,10 @@ class XiaozhiService {
         if (status.isDenied) {
           print('$TAG: 麦克风权限被拒绝');
           _dispatchEvent(
-            XiaozhiServiceEvent(XiaozhiServiceEventType.error, 'Quyền micro bị từ chối'),
+            XiaozhiServiceEvent(
+              XiaozhiServiceEventType.error,
+              'Quyền micro bị từ chối',
+            ),
           );
           return;
         }
@@ -499,7 +572,7 @@ class XiaozhiService {
       // 设置音频流订阅
       _audioStreamSubscription = AudioUtil.audioStream.listen((opusData) {
         // 发送音频数据
-        _webSocketManager?.sendBinaryMessage(opusData);
+        _sendAudioChunk(opusData);
       });
 
       // 发送开始监听命令
@@ -509,7 +582,7 @@ class XiaozhiService {
         'state': 'start',
         'mode': 'auto',
       };
-      _webSocketManager?.sendMessage(jsonEncode(message));
+      _sendControlMessage(message);
       print('$TAG: 已发送开始监听消息 (语音通话模式)');
     } catch (e) {
       print('$TAG: 开始监听失败: $e');
@@ -528,14 +601,14 @@ class XiaozhiService {
       await AudioUtil.stopRecording();
 
       // 发送停止监听命令
-      if (_sessionId != null && _webSocketManager != null) {
+      if (_sessionId != null && _channelConnected) {
         final message = {
           'session_id': _sessionId,
           'type': 'listen',
           'state': 'stop',
           'mode': 'auto',
         };
-        _webSocketManager?.sendMessage(jsonEncode(message));
+        _sendControlMessage(message);
         print('$TAG: 已发送停止监听消息 (语音通话模式)');
       }
     } catch (e) {
@@ -554,9 +627,9 @@ class XiaozhiService {
       await AudioUtil.stopRecording();
 
       // 发送中止命令
-      if (_sessionId != null && _webSocketManager != null) {
+      if (_sessionId != null && _channelConnected) {
         final message = {'session_id': _sessionId, 'type': 'abort'};
-        _webSocketManager?.sendMessage(jsonEncode(message));
+        _sendControlMessage(message);
         print('$TAG: 已发送中止消息');
       }
     } catch (e) {
@@ -568,12 +641,12 @@ class XiaozhiService {
   void toggleMute() {
     _isMuted = !_isMuted;
 
-    if (_webSocketManager == null || !_webSocketManager!.isConnected) return;
+    if (!_channelConnected) return;
 
     try {
       final request = {'type': _isMuted ? 'voice_mute' : 'voice_unmute'};
 
-      _webSocketManager!.sendMessage(jsonEncode(request));
+      _sendControlMessage(request);
     } catch (e) {
       print('$TAG: 切换静音状态失败: $e');
     }
@@ -725,7 +798,7 @@ class XiaozhiService {
           'frame_duration': 60,
         },
       };
-      _webSocketManager?.sendMessage(jsonEncode(startMessage));
+      _sendControlMessage(startMessage);
       print('$TAG: 已发送开始通话消息');
     } catch (e) {
       print('$TAG: 开始通话失败: $e');
@@ -747,10 +820,7 @@ class XiaozhiService {
   }
 
   /// 判断是否已连接
-  bool get isConnected =>
-      _isConnected &&
-      _webSocketManager != null &&
-      _webSocketManager!.isConnected;
+  bool get isConnected => _isConnected && _channelConnected;
 
   /// 判断是否静音
   bool get isMuted => _isMuted;
@@ -768,7 +838,7 @@ class XiaozhiService {
 
   /// 开始监听（按住说话模式）
   Future<void> startListening({String mode = 'manual'}) async {
-    if (!_isConnected || _webSocketManager == null) {
+    if (!isConnected) {
       await connect();
     }
 
@@ -789,13 +859,13 @@ class XiaozhiService {
         'state': 'start',
         'mode': mode,
       };
-      _webSocketManager?.sendMessage(jsonEncode(message));
+      _sendControlMessage(message);
       print('$TAG: 已发送开始监听消息 (按住说话)');
 
       // 设置音频流订阅
       _audioStreamSubscription = AudioUtil.audioStream.listen((opusData) {
         // 发送音频数据
-        _webSocketManager?.sendBinaryMessage(opusData);
+        _sendAudioChunk(opusData);
       });
     } catch (e) {
       print('$TAG: 开始监听失败: $e');
@@ -814,13 +884,13 @@ class XiaozhiService {
       await AudioUtil.stopRecording();
 
       // 发送停止监听命令
-      if (_sessionId != null && _webSocketManager != null) {
+      if (_sessionId != null && _channelConnected) {
         final message = {
           'session_id': _sessionId,
           'type': 'listen',
           'state': 'stop',
         };
-        _webSocketManager?.sendMessage(jsonEncode(message));
+        _sendControlMessage(message);
         print('$TAG: 已发送停止监听消息');
       }
     } catch (e) {
@@ -831,13 +901,13 @@ class XiaozhiService {
   /// 发送中断消息
   Future<void> sendAbortMessage() async {
     try {
-      if (_webSocketManager != null && _isConnected && _sessionId != null) {
+      if (_isConnected && _sessionId != null) {
         final abortMessage = {
           'session_id': _sessionId,
           'type': 'abort',
           'reason': 'wake_word_detected',
         };
-        _webSocketManager?.sendMessage(jsonEncode(abortMessage));
+        _sendControlMessage(abortMessage);
         print('$TAG: 发送中断消息: $abortMessage');
 
         // 如果当前正在录音，短暂停顿后继续

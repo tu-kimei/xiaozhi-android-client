@@ -176,9 +176,18 @@ class _ChatScreenState extends State<ChatScreen> {
   // 初始化小智服务
   Future<void> _initXiaozhiService() async {
     final configProvider = Provider.of<ConfigProvider>(context, listen: false);
-    final xiaozhiConfig = configProvider.xiaozhiConfigs.firstWhere(
-      (config) => config.id == widget.conversation.configId,
-    );
+    XiaozhiConfig? xiaozhiConfig;
+    for (final config in configProvider.xiaozhiConfigs) {
+      if (config.id == widget.conversation.configId) {
+        xiaozhiConfig = config;
+        break;
+      }
+    }
+
+    if (xiaozhiConfig == null) {
+      print('ChatScreen: Không tìm thấy cấu hình Xiaozhi cho hội thoại này');
+      return;
+    }
 
     _xiaozhiService = XiaozhiService(
       websocketUrl: xiaozhiConfig.websocketUrl,

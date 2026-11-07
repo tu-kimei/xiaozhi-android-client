@@ -95,6 +95,7 @@ class ConfigProvider extends ChangeNotifier {
     String name,
     String websocketUrl, {
     String? customMacAddress,
+    String? token,
   }) async {
     // 如果提供了自定义MAC地址，直接使用；否则使用设备ID生成
     final macAddress = customMacAddress ?? await _getDeviceMacAddress();
@@ -104,7 +105,7 @@ class ConfigProvider extends ChangeNotifier {
       name: name,
       websocketUrl: websocketUrl,
       macAddress: macAddress,
-      token: 'test-token',
+      token: token ?? '',
     );
 
     _xiaozhiConfigs.add(newConfig);
@@ -112,13 +113,30 @@ class ConfigProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Sinh MAC address ngẫu nhiên mới với OUI prefix của Espressif.
+  /// Dùng cho mỗi config OTA mới để OTA server coi đây là thiết bị mới
+  /// và trả về mã kích hoạt (OTP) thay vì coi là thiết bị đã kích hoạt.
+  String _generateRandomMac() {
+    final random = math.Random.secure();
+    final List<int> macBytes = [0x24, 0x0A, 0xC4];
+    for (int i = 0; i < 3; i++) {
+      macBytes.add(random.nextInt(256));
+    }
+    return macBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(':').toUpperCase();
+  }
+
   // 添加通过OTA激活的小智配置（如 xiaozhi.me 官方服务），WebSocket地址和Token在激活后填入
-  Future<XiaozhiConfig> addXiaozhiOtaConfig(String name, String otaUrl) async {
+  Future<XiaozhiConfig> addXiaozhiOtaConfig(
+    String name,
+    String otaUrl, {
+    String? customMacAddress,
+  }) async {
     final newConfig = XiaozhiConfig(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       name: name,
       websocketUrl: '',
-      macAddress: await _getDeviceMacAddress(),
+      // Mỗi config OTA mới dùng MAC ngẫu nhiên để server trả OTP mới
+      macAddress: customMacAddress ?? _generateRandomMac(),
       token: '',
       otaUrl: otaUrl,
       clientId: const Uuid().v4(),
@@ -263,24 +281,26 @@ class ConfigProvider extends ChangeNotifier {
   }
 
   String _generateMacFromDeviceId(String deviceId) {
+    // Sử dụng OUI prefix của Espressif (ESP32) để trông như MAC thật
+    final List<int> macBytes = [0x24, 0x0A, 0xC4];
     final bytes = utf8.encode(deviceId);
     final digest = md5.convert(bytes);
     final hash = digest.toString();
 
-    // Format as MAC address (XX:XX:XX:XX:XX:XX)
-    final List<String> macParts = [];
-    for (int i = 0; i < 6; i++) {
-      macParts.add(hash.substring(i * 2, i * 2 + 2));
+    // Lấy 3 byte còn lại từ hash
+    for (int i = 0; i < 3; i++) {
+      macBytes.add(int.parse(hash.substring(i * 2, i * 2 + 2), radix: 16));
     }
 
-    return macParts.join(':');
+    // Format thành XX:XX:XX:XX:XX:XX
+    return macBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(':').toUpperCase();
   }
 
   // 获取设备MAC地址
   Future<String> _getDeviceMacAddress() async {
     final deviceId = await _getSimpleDeviceId();
 
-    // 如果设备ID本身就是MAC地址格式，直接使用
+    // 如果设备ID本身就是MAC地址格式,直接使用
     if (_isMacAddress(deviceId)) {
       return deviceId;
     }
@@ -288,6 +308,9 @@ class ConfigProvider extends ChangeNotifier {
     // 否则生成一个MAC地址
     return _generateMacFromDeviceId(deviceId);
   }
+
+  /// Public wrapper để lấy MAC địa chỉ từ bên ngoài provider
+  Future<String> getDeviceMacAddress() async => _getDeviceMacAddress();
 
   // 检查字符串是否是MAC地址格式
   bool _isMacAddress(String str) {

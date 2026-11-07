@@ -1948,12 +1948,89 @@ class _SettingsScreenState extends State<SettingsScreen>
   }
 
   Future<void> _addXiaozhiMeConfig() async {
-    final config = await Provider.of<ConfigProvider>(
-      context,
-      listen: false,
-    ).addXiaozhiOtaConfig('xiaozhi.me', XiaozhiOtaService.DEFAULT_OTA_URL);
-    if (!mounted) return;
-    await _openXiaozhiActivation(config);
+    final tokenController = TextEditingController();
+
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
+        title: const Text('Kết nối xiaozhi.me'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Chọn cách kết nối:',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'Nếu đã có token từ xiaozhi.me, hãy nhập vào bên dưới. Nếu chưa có, chọn Kích hoạt qua OTA.',
+              style: TextStyle(color: Colors.grey, fontSize: 13),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: tokenController,
+              decoration: const InputDecoration(
+                hintText: 'Nhập token từ xiaozhi.me (tùy chọn)',
+                border: OutlineInputBorder(),
+                contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+              ),
+              maxLines: 1,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Hủy'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              final token = tokenController.text.trim();
+              Navigator.pop(dialogContext);
+
+              if (token.isNotEmpty) {
+                // Nhập token thủ công, không qua OTA activation
+                final configProvider = Provider.of<ConfigProvider>(
+                  context,
+                  listen: false,
+                );
+                final macAddress = await configProvider.getDeviceMacAddress();
+                await configProvider.addXiaozhiConfig(
+                  'xiaozhi.me',
+                  'wss://api.tenclass.net/xiaozhi/v1/',
+                  customMacAddress: macAddress,
+                  token: token,
+                );
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Đã thêm cấu hình xiaozhi.me với token thủ công'),
+                    backgroundColor: Colors.green,
+                  ),
+                );
+              } else {
+                // Kích hoạt qua OTA (màn hình cũ)
+                final config = await Provider.of<ConfigProvider>(
+                  context,
+                  listen: false,
+                ).addXiaozhiOtaConfig('xiaozhi.me', XiaozhiOtaService.DEFAULT_OTA_URL);
+                if (!mounted) return;
+                await _openXiaozhiActivation(config);
+              }
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.black,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Tiếp tục'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _openXiaozhiActivation(XiaozhiConfig config) {
@@ -2464,6 +2541,7 @@ class _SettingsScreenState extends State<SettingsScreen>
                           websocketUrl,
                           customMacAddress:
                               macAddress.isNotEmpty ? macAddress : null,
+                          token: token.isNotEmpty ? token : null,
                         );
 
                         Navigator.pop(context);
