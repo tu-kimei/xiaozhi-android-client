@@ -49,7 +49,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     'Tin nhắn',
                     style: TextStyle(
                       fontWeight: FontWeight.bold,
-                      fontSize: 28,
+                      fontSize: 24,
                       color: Colors.black,
                     ),
                   ),
@@ -58,10 +58,26 @@ class _HomeScreenState extends State<HomeScreen> {
                   backgroundColor: const Color(0xFFF8F9FA),
                   centerTitle: false,
                   titleSpacing: 20,
-                  toolbarHeight: 65,
+                  toolbarHeight: 56,
                   actions: [
+                    // 新建对话（原来的悬浮按钮会挡住列表项的删除按钮）
+                    IconButton(
+                      tooltip: 'Hội thoại mới',
+                      icon: const Icon(Icons.add_circle, size: 30),
+                      color: Colors.black,
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder:
+                                (context) => const ConversationTypeScreen(),
+                          ),
+                        );
+                      },
+                    ),
                     Padding(
-                      padding: const EdgeInsets.only(right: 16),
+                      // 右上角留出机器人系统电量浮层的位置
+                      padding: const EdgeInsets.only(right: 44),
                       child: Material(
                         color: Colors.transparent,
                         borderRadius: BorderRadius.circular(12),
@@ -109,42 +125,6 @@ class _HomeScreenState extends State<HomeScreen> {
                     ],
                   ),
                 ),
-        floatingActionButton:
-            _selectedIndex == 0
-                ? Container(
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(30),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.2),
-                        blurRadius: 10,
-                        spreadRadius: 0,
-                        offset: const Offset(0, 4),
-                      ),
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.1),
-                        blurRadius: 20,
-                        spreadRadius: -2,
-                        offset: const Offset(0, 10),
-                      ),
-                    ],
-                  ),
-                  child: FloatingActionButton(
-                    onPressed: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => const ConversationTypeScreen(),
-                        ),
-                      );
-                    },
-                    backgroundColor: Colors.black,
-                    child: const Icon(Icons.add, size: 30, color: Colors.white),
-                    elevation: 0,
-                    shape: const CircleBorder(),
-                  ),
-                )
-                : null,
         bottomNavigationBar: ClipRRect(
           borderRadius: const BorderRadius.only(
             topLeft: Radius.circular(20),
@@ -492,39 +472,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _buildConversationTile(Conversation conversation) {
     return SlidableDeleteTile(
       key: Key(conversation.id),
-      onDelete: () {
-        // 删除对话
-        Provider.of<ConversationProvider>(
-          context,
-          listen: false,
-        ).deleteConversation(conversation.id);
-
-        // 显示撤销消息
-        ScaffoldMessenger.of(context).clearSnackBars();
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Đã xóa ${conversation.title}'),
-            backgroundColor: Colors.grey.shade800,
-            behavior: SnackBarBehavior.floating,
-            duration: const Duration(seconds: 3),
-            margin: EdgeInsets.only(bottom: 70, left: 20, right: 20),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(10),
-            ),
-            action: SnackBarAction(
-              label: 'Hoàn tác',
-              textColor: Colors.white,
-              onPressed: () {
-                // 恢复被删除的对话
-                Provider.of<ConversationProvider>(
-                  context,
-                  listen: false,
-                ).restoreLastDeletedConversation();
-              },
-            ),
-          ),
-        );
-      },
+      onDelete: () => _deleteWithUndo(conversation),
       onTap: () {
         // 直接导航到聊天页面
         Navigator.push(
@@ -546,187 +494,100 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  void _showConversationOptions(Conversation conversation) {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.white,
-      elevation: 20,
-      barrierColor: Colors.black.withOpacity(0.5),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+  void _deleteWithUndo(Conversation conversation) {
+    final provider = Provider.of<ConversationProvider>(context, listen: false);
+    provider.deleteConversation(conversation.id);
+    ScaffoldMessenger.of(context).clearSnackBars();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Đã xóa ${conversation.title}'),
+        backgroundColor: Colors.grey.shade800,
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 4),
+        margin: const EdgeInsets.only(bottom: 70, left: 12, right: 12),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        action: SnackBarAction(
+          label: 'Hoàn tác',
+          textColor: Colors.white,
+          onPressed: provider.restoreLastDeletedConversation,
+        ),
       ),
-      builder: (context) {
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 36,
-                height: 5,
-                margin: const EdgeInsets.symmetric(vertical: 12),
-                decoration: BoxDecoration(
-                  color: Colors.grey.shade300,
-                  borderRadius: BorderRadius.circular(2.5),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.05),
-                      blurRadius: 1,
-                      spreadRadius: 0,
-                      offset: const Offset(0, 0.5),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 8),
-              Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 8,
-                ),
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(16),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.06),
-                        blurRadius: 10,
-                        spreadRadius: 0,
-                        offset: const Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                  child: Material(
-                    color: Colors.transparent,
-                    child: ListTile(
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 20,
-                        vertical: 4,
-                      ),
-                      leading: Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: Colors.grey.shade50,
-                          borderRadius: BorderRadius.circular(10),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.06),
-                              blurRadius: 4,
-                              spreadRadius: 0,
-                              offset: const Offset(0, 2),
-                            ),
-                          ],
-                        ),
-                        child: Icon(
-                          conversation.isPinned
-                              ? Icons.push_pin
-                              : Icons.push_pin_outlined,
-                          color: Colors.black,
-                          size: 24,
-                        ),
-                      ),
-                      title: Text(
-                        conversation.isPinned ? 'Bỏ ghim' : 'Ghim hội thoại',
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.black,
-                        ),
-                      ),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      onTap: () {
-                        Navigator.pop(context);
-                        Provider.of<ConversationProvider>(
-                          context,
-                          listen: false,
-                        ).togglePinConversation(conversation.id);
-                      },
-                    ),
-                  ),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 8,
-                ),
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(16),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.06),
-                        blurRadius: 10,
-                        spreadRadius: 0,
-                        offset: const Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                  child: Material(
-                    color: Colors.transparent,
-                    child: ListTile(
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 20,
-                        vertical: 4,
-                      ),
-                      leading: Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: Colors.red.shade50,
-                          borderRadius: BorderRadius.circular(10),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.red.withOpacity(0.1),
-                              blurRadius: 4,
-                              spreadRadius: 0,
-                              offset: const Offset(0, 2),
-                            ),
-                          ],
-                        ),
-                        child: const Icon(
-                          Icons.delete,
-                          color: Colors.red,
-                          size: 24,
-                        ),
-                      ),
-                      title: const Text(
-                        'Xóa hội thoại',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.red,
-                        ),
-                      ),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      onTap: () {
-                        Navigator.pop(context);
-                        Provider.of<ConversationProvider>(
-                          context,
-                          listen: false,
-                        ).deleteConversation(conversation.id);
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text('Đã xóa ${conversation.title}'),
-                            backgroundColor: Colors.grey.shade800,
-                            behavior: SnackBarBehavior.floating,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 24),
-            ],
+    );
+  }
+
+  /// 长按菜单：用紧凑对话框代替底部弹层，小屏幕（机器人 308x240）也能看到"删除"
+  void _showConversationOptions(Conversation conversation) {
+    showDialog(
+      context: context,
+      builder: (dialogContext) {
+        return SimpleDialog(
+          backgroundColor: Colors.white,
+          insetPadding: const EdgeInsets.symmetric(
+            horizontal: 24,
+            vertical: 12,
           ),
+          titlePadding: const EdgeInsets.fromLTRB(20, 14, 20, 4),
+          contentPadding: const EdgeInsets.fromLTRB(0, 4, 0, 8),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          title: Text(
+            conversation.title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+          ),
+          children: [
+            SimpleDialogOption(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+              onPressed: () {
+                Navigator.pop(dialogContext);
+                _deleteWithUndo(conversation);
+              },
+              child: const Row(
+                children: [
+                  Icon(Icons.delete, color: Colors.red),
+                  SizedBox(width: 12),
+                  Text(
+                    'Xóa hội thoại',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.red,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            SimpleDialogOption(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+              onPressed: () {
+                Navigator.pop(dialogContext);
+                Provider.of<ConversationProvider>(
+                  context,
+                  listen: false,
+                ).togglePinConversation(conversation.id);
+              },
+              child: Row(
+                children: [
+                  Icon(
+                    conversation.isPinned
+                        ? Icons.push_pin
+                        : Icons.push_pin_outlined,
+                    color: Colors.black,
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    conversation.isPinned ? 'Bỏ ghim' : 'Ghim hội thoại',
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         );
       },
     );

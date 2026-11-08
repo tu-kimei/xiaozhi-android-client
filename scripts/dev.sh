@@ -12,6 +12,13 @@
 #     ./scripts/dev.sh            # tự chọn thiết bị android đang online đầu tiên
 #     ./scripts/dev.sh <device>   # chỉ định thiết bị (adb devices)
 #
+# Kích hoạt từ terminal khác (hoặc từ Claude) mà không cần gõ phím:
+#     kill -USR1 "$(cat /tmp/xiaozhi-flutter.pid)"   # hot reload
+#     kill -USR2 "$(cat /tmp/xiaozhi-flutter.pid)"   # hot restart
+#
+# Lưu ý: sửa code Kotlin/Android, AndroidManifest hoặc pubspec.yaml thì
+# hot reload không áp dụng được -> thoát (q) và chạy lại script.
+#
 set -euo pipefail
 
 # shellcheck disable=SC1091
@@ -32,4 +39,5 @@ echo "==> Flutter debug trên: $DEVICE"
 echo "    r = hot reload | R = hot restart | q = thoát"
 echo
 
-exec flutter run -d "$DEVICE" --debug
+PID_FILE=/tmp/xiaozhi-flutter.pid
+exec flutter run -d "$DEVICE" --debug --pid-file "$PID_FILE"

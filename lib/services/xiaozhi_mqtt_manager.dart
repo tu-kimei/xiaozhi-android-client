@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:mqtt_client/mqtt_client.dart';
 import 'package:mqtt_client/mqtt_server_client.dart';
 
+import 'xiaozhi_udp_channel.dart';
 import 'xiaozhi_websocket_manager.dart'
     show XiaozhiEvent, XiaozhiEventType, XiaozhiWebSocketListener;
 
@@ -49,6 +51,30 @@ class XiaozhiMqttManager {
 
   /// 服务器 hello 中返回的会话 ID
   String? get sessionId => _sessionId;
+
+  /// 语音音频 UDP 通道（hello 响应中下发参数）
+  XiaozhiUdpChannel? _udp;
+
+  /// 当前是否有可用会话（收到 hello 且未 goodbye）
+  bool get hasSession => _helloReceived && _sessionId != null;
+
+  /// 会话过期（goodbye）后主动重新握手
+  void ensureSession() {
+    if (hasSession || _helloRequested) return;
+    _sendHello();
+  }
+
+  /// 客户端主动结束会话（与 esp32 固件 CloseAudioChannel 相同：发 goodbye）。
+  /// 用于“噪声误触发打开的会话”：免得服务器空闲一分钟后说一句告别语。
+  void closeSession() {
+    final id = _sessionId;
+    if (id == null) return;
+    sendMessage(jsonEncode({'session_id': id, 'type': 'goodbye'}));
+    _closeUdp();
+    _helloReceived = false;
+    _helloRequested = false;
+    _sessionId = null;
+  }
 
   bool get isConnected => _isConnected;
 
@@ -213,7 +239,8 @@ class XiaozhiMqttManager {
       "type": "hello",
       "version": 3,
       "transport": "udp",
-      "features": {"mcp": true, "aec": true},
+      // 不要声明 aec：服务器会在第一轮之后忽略后续的 listen（已在 PC 上复现）
+      "features": {"mcp": true},
       "audio_params": {
         "format": "opus",
         "sample_rate": 16000,
@@ -293,9 +320,36 @@ class XiaozhiMqttManager {
     }
   }
 
-  /// MQTT 模式下音频走 UDP，这里暂不处理
+  /// MQTT 模式下音频走 UDP（AES-128-CTR 加密）
   void sendBinaryMessage(List<int> data) {
-    // TODO: 语音通话时通过 UDP + AES-128-CTR 发送 Opus 数据
+    if (_udp == null) print('$TAG: 无 UDP 通道，音频未发送');
+    _udp?.send(data);
+  }
+
+  Future<void> _openUdp(Map udp) async {
+    _closeUdp();
+    try {
+      final channel = XiaozhiUdpChannel(
+        server: udp['server'].toString(),
+        port: (udp['port'] as num).toInt(),
+        keyHex: udp['key'].toString(),
+        nonceHex: udp['nonce'].toString(),
+        onAudio:
+            (Uint8List opus) => _dispatchEvent(
+              XiaozhiEvent(type: XiaozhiEventType.binaryMessage, data: opus),
+            ),
+      );
+      _udp = channel;
+      await channel.open();
+    } catch (e) {
+      print('$TAG: 打开 UDP 通道失败: $e');
+      _udp = null;
+    }
+  }
+
+  void _closeUdp() {
+    _udp?.close();
+    _udp = null;
   }
 
   void _onMessage(List<MqttReceivedMessage<MqttMessage>> messages) {
@@ -323,9 +377,21 @@ class XiaozhiMqttManager {
             _sessionId = decoded['session_id'].toString();
             print('$TAG: 会话ID $_sessionId');
           }
+          final udp = decoded['udp'];
+          if (udp is Map) {
+            // UDP 必须在通知上层 hello 之前就绪，上层收到 hello 会立即开始收发音频
+            _openUdp(udp).whenComplete(() {
+              _flushPendingTexts();
+              _dispatchEvent(
+                XiaozhiEvent(type: XiaozhiEventType.message, data: text),
+              );
+            });
+            return;
+          }
           _flushPendingTexts();
         } else if (type == 'goodbye') {
           print('$TAG: 服务器结束会话，等待下次请求时重新 hello');
+          _closeUdp();
           _helloReceived = false;
           _helloRequested = false;
           _sessionId = null;
@@ -352,6 +418,7 @@ class XiaozhiMqttManager {
 
   void _onDisconnected() {
     print('$TAG: MQTT 连接已断开');
+    _closeUdp();
     _isConnected = false;
     _helloReceived = false;
     _helloRequested = false;
@@ -364,6 +431,7 @@ class XiaozhiMqttManager {
   }
 
   Future<void> disconnect() async {
+    _closeUdp();
     _helloTimeout?.cancel();
     _helloTimeout = null;
     _inflightTimeout?.cancel();

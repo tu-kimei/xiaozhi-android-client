@@ -1,3 +1,4 @@
+import '../widgets/voice_state_chip.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -438,14 +439,22 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
                         size: 16,
                       ),
                       const SizedBox(width: 8),
-                      Text(
-                        _isSpeaking ? '$_statusText (đang ghi âm)' : _statusText,
-                        style: TextStyle(
-                          color: _isConnected ? Colors.green : Colors.red,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
+                      // 已连接时显示机器人是否正在听
+                      _isConnected
+                          ? Flexible(
+                            child: VoiceStateChip(
+                              state: _xiaozhiService.voiceState,
+                              onDark: true,
+                            ),
+                          )
+                          : Text(
+                            _statusText,
+                            style: const TextStyle(
+                              color: Colors.red,
+                              fontSize: 16,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
                     ],
                   ),
                 ),

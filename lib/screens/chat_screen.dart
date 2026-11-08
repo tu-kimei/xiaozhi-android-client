@@ -1,3 +1,4 @@
+import '../widgets/voice_state_chip.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'dart:math' as math;
@@ -341,7 +342,8 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
           if (widget.conversation.type == ConversationType.xiaozhi)
             Container(
-              margin: const EdgeInsets.only(right: 12),
+              // 右上角留出机器人系统电量浮层的位置
+              margin: const EdgeInsets.only(right: 44),
               decoration: BoxDecoration(
                 color: Colors.transparent,
                 borderRadius: BorderRadius.circular(12),
@@ -556,24 +558,11 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Widget _buildXiaozhiInfo() {
-    final configProvider = Provider.of<ConfigProvider>(context);
-    final xiaozhiConfig = configProvider.xiaozhiConfigs.firstWhere(
-      (config) => config.id == widget.conversation.configId,
-      orElse:
-          () => XiaozhiConfig(
-            id: '',
-            name: 'Dịch vụ không rõ',
-            websocketUrl: '',
-            macAddress: '',
-            token: '',
-          ),
-    );
-
     final bool isConnected = _xiaozhiService?.isConnected ?? false;
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      margin: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      margin: const EdgeInsets.fromLTRB(12, 6, 12, 4),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
@@ -621,60 +610,16 @@ class _ChatScreenState extends State<ChatScreen> {
           Container(width: 1, height: 16, color: Colors.grey.withOpacity(0.3)),
           const SizedBox(width: 12),
 
-          // WebSocket信息
+          // 机器人语音状态（正在听 / 已停止听）
           Expanded(
-            child: Text(
-              '${xiaozhiConfig.websocketUrl}',
-              style: const TextStyle(
-                color: Colors.black54,
-                fontSize: 12,
-                fontWeight: FontWeight.w400,
-              ),
-              overflow: TextOverflow.ellipsis,
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child:
+                  _xiaozhiService == null
+                      ? const SizedBox.shrink()
+                      : VoiceStateChip(state: _xiaozhiService!.voiceState),
             ),
           ),
-
-          if (xiaozhiConfig.macAddress.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(left: 8),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.grey.shade200),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.04),
-                      blurRadius: 4,
-                      spreadRadius: 0,
-                      offset: const Offset(0, 1),
-                    ),
-                    BoxShadow(
-                      color: Colors.white.withOpacity(0.9),
-                      blurRadius: 3,
-                      spreadRadius: 0,
-                      offset: const Offset(0, -1),
-                    ),
-                  ],
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.devices, size: 12, color: Colors.grey.shade500),
-                    const SizedBox(width: 4),
-                    Text(
-                      '${xiaozhiConfig.macAddress}',
-                      style: TextStyle(
-                        color: Colors.grey.shade700,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
         ],
       ),
     );
@@ -1234,7 +1179,9 @@ class _ChatScreenState extends State<ChatScreen> {
         }
 
         if (_minimaxService == null) {
-          throw Exception("Chưa cấu hình MiniMax, hãy cài đặt MiniMax API trước");
+          throw Exception(
+            "Chưa cấu hình MiniMax, hãy cài đặt MiniMax API trước",
+          );
         }
 
         final sessionId = widget.conversation.id;
@@ -1291,7 +1238,9 @@ class _ChatScreenState extends State<ChatScreen> {
 
           // 如果重连失败，提示用户
           if (!_xiaozhiService!.isConnected) {
-            throw Exception("Không thể kết nối Xiaozhi, hãy kiểm tra mạng hoặc cấu hình");
+            throw Exception(
+              "Không thể kết nối Xiaozhi, hãy kiểm tra mạng hoặc cấu hình",
+            );
           }
 
           // 刷新UI显示连接状态
@@ -1699,7 +1648,9 @@ class _ChatScreenState extends State<ChatScreen> {
           content: chatResponse,
         );
       } else {
-        throw Exception("Tải lên thành công nhưng máy chủ không trả về ID tệp: $response");
+        throw Exception(
+          "Tải lên thành công nhưng máy chủ không trả về ID tệp: $response",
+        );
       }
 
       _showCustomSnackbar('Tải ảnh lên thành công');

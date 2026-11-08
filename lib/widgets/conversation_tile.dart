@@ -42,11 +42,11 @@ class ConversationTile extends StatelessWidget {
           onTap: onTap,
           onLongPress: onLongPress,
           child: Padding(
-            padding: const EdgeInsets.all(16.0),
+            padding: const EdgeInsets.all(12.0),
             child: Row(
               children: [
                 _buildAvatar(),
-                const SizedBox(width: 16),
+                const SizedBox(width: 12),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -56,16 +56,26 @@ class ConversationTile extends StatelessWidget {
                           Expanded(
                             child: Row(
                               children: [
-                                Text(
-                                  conversation.title,
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 16,
-                                    color: Colors.black,
+                                // 小屏幕上标题过长时省略，避免整行溢出
+                                Flexible(
+                                  flex: 2,
+                                  child: Text(
+                                    conversation.title,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 16,
+                                      color: Colors.black,
+                                    ),
                                   ),
                                 ),
                                 const SizedBox(width: 6),
-                                _buildTypeTag(context),
+                                // 标签文字来自配置名称，长度不可控，必须允许收缩
+                                Flexible(
+                                  flex: 1,
+                                  child: _buildTypeTag(context),
+                                ),
                               ],
                             ),
                           ),
@@ -147,6 +157,8 @@ class ConversationTile extends StatelessWidget {
       ),
       child: Text(
         label,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
         style: TextStyle(
           fontSize: 12,
           color: isDify ? Colors.blue.shade600 : Colors.purple.shade600,

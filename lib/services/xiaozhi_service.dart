@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'dart:io';
+import 'package:flutter/foundation.dart' show ValueNotifier, kDebugMode;
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter_sound/flutter_sound.dart';
@@ -10,6 +11,7 @@ import '../services/xiaozhi_mqtt_manager.dart';
 import '../services/xiaozhi_ota_service.dart';
 import '../utils/device_util.dart';
 import '../utils/audio_util.dart';
+import '../utils/voice_activity_detector.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 /// 小智服务事件类型
@@ -38,6 +40,16 @@ typedef XiaozhiServiceListener = void Function(XiaozhiServiceEvent event);
 /// 消息监听器
 typedef MessageListener = void Function(dynamic message);
 
+/// 机器人语音交互状态（用于界面显示"正在听/已停止听"）
+enum XiaozhiVoiceState {
+  idle, // 已停止听
+  waiting, // 麦克风打开，等待有人开口（本地 VAD 未检测到语音）
+  listening, // 正在听（检测到语音，正在上传）
+  thinking, // 已停止听，等待服务器回答
+  micBusy, // 麦克风没有数据（被其他应用占用）
+  speaking, // 机器人正在说话
+}
+
 /// 小智服务
 class XiaozhiService {
   static const String TAG = "XiaozhiService";
@@ -64,6 +76,48 @@ class XiaozhiService {
   WebSocketChannel? _ws;
   bool _hasStartedCall = false;
   MessageListener? _messageListener;
+
+  // 机器人说话(TTS)时暂停上传麦克风，避免设备没有回声消除时听到自己的声音
+  bool _micGateOpen = true;
+  Timer? _resumeListenTimer;
+
+  // —— 语音通话：本地 VAD 决定何时开始/停止听（manual 模式）——
+  final VoiceActivityDetector _vad = VoiceActivityDetector();
+  static const int _prerollFrames = 8; // 约 480ms，避免丢掉第一个字
+  final List<Uint8List> _preroll = [];
+  bool _utteranceActive = false;
+  // 开口时会话已过期：先缓存音频，等 hello 后再补发
+  bool _utterancePendingSession = false;
+  bool _pendingUtteranceEnded = false;
+  final List<Uint8List> _pendingFrames = [];
+  Timer? _replyTimeout;
+  // 当前这轮回答来自噪声幻听，丢弃其音频和文字
+  bool _muteReply = false;
+  // 每次 TTS 开始/结束递增，作废过期的“播完后恢复监听”回调
+  int _drainToken = 0;
+
+  /// 服务器 ASR（Whisper 类）对噪声常输出的固定幻听句
+  static bool isNoiseHallucination(String text) {
+    final t = text.toLowerCase();
+    return t.contains('subscribe') ||
+        t.contains('video hấp dẫn') ||
+        t.contains('đăng ký kênh') ||
+        t.contains('ghiền mì gõ') ||
+        t.contains('cảm ơn các bạn đã theo dõi') ||
+        t.contains('hẹn gặp lại các bạn trong') ||
+        t.contains('la la school') ||
+        t.contains('thực hiện hành động này trên youtube') ||
+        t.contains('kênh youtube');
+  }
+  Timer? _micWatchdog;
+  int _vadLogCounter = 0;
+  // 调试：保存最近一句上传的 Opus 帧，便于离线检查（仅 debug 构建）
+  final List<Uint8List> _debugUtterance = [];
+
+  /// 当前语音交互状态，界面通过 ValueListenableBuilder 监听
+  final ValueNotifier<XiaozhiVoiceState> voiceState = ValueNotifier(
+    XiaozhiVoiceState.idle,
+  );
 
   /// 工厂构造函数，实现单例模式
   factory XiaozhiService({
@@ -240,6 +294,7 @@ class XiaozhiService {
   }
 
   /// 是否使用 MQTT 控制通道
+  /// 官方服务器对已绑定设备只接受 MQTT + UDP（WebSocket 会在 hello 后被关闭）
   bool get _useMqtt => otaUrl.isNotEmpty && (_otaResult?.hasMqtt ?? false);
 
   /// 建立 MQTT 连接
@@ -567,31 +622,282 @@ class XiaozhiService {
       }
 
       // 开始录音
+      _isVoiceCallActive = true;
       await AudioUtil.startRecording();
 
-      // 设置音频流订阅
-      _audioStreamSubscription = AudioUtil.audioStream.listen((opusData) {
-        // 发送音频数据
-        _sendAudioChunk(opusData);
-      });
+      // 设置音频帧订阅（避免重复订阅导致音频重复发送）
+      _audioStreamSubscription ??= AudioUtil.frameStream.listen(_onVoiceFrame);
 
-      // 发送开始监听命令
-      final message = {
-        'session_id': _sessionId,
-        'type': 'listen',
-        'state': 'start',
-        'mode': 'auto',
-      };
-      _sendControlMessage(message);
-      print('$TAG: 已发送开始监听消息 (语音通话模式)');
+      if (_mqttManager != null && !_mqttManager!.hasSession) {
+        _mqttManager!.ensureSession();
+      }
+      _resumeWaiting();
+      _startMicWatchdog();
+      print('$TAG: 语音通话开始，本地 VAD 等待说话');
     } catch (e) {
       print('$TAG: 开始监听失败: $e');
       throw Exception('Bắt đầu nhập giọng nói thất bại: $e');
     }
   }
 
+  /// 通话中每 3 秒检查麦克风是否还有数据；没有则重启录音，仍失败则提示
+  void _startMicWatchdog() {
+    _micWatchdog?.cancel();
+    _micWatchdog = Timer.periodic(const Duration(seconds: 3), (_) async {
+      if (!_inVoiceCall) return;
+      final last = AudioUtil.lastFrameAt;
+      final stale =
+          last == null ||
+          DateTime.now().difference(last) > const Duration(seconds: 3);
+      if (!stale) {
+        if (voiceState.value == XiaozhiVoiceState.micBusy) _resumeWaiting();
+        return;
+      }
+      print('$TAG: 麦克风 3 秒无数据，尝试重启录音');
+      await AudioUtil.startRecording();
+      await Future.delayed(const Duration(milliseconds: 800));
+      final again = AudioUtil.lastFrameAt;
+      if (again == null ||
+          DateTime.now().difference(again) > const Duration(seconds: 2)) {
+        print('$TAG: 麦克风仍无数据，可能被其他应用占用');
+        voiceState.value = XiaozhiVoiceState.micBusy;
+      }
+    });
+  }
+
+  /// 断句交给服务器 VAD（listen mode=auto，与原厂 Lily 应用相同）：
+  /// 等待期间持续上传麦克风，服务器判断说完后回 stt。
+  /// 本地 VAD 仅用于界面显示“正在听”。设为 false 回到本地 VAD + manual。
+  static const bool _serverVad = true;
+
+  /// 已向服务器发送 listen start(auto)，正在持续上传
+  bool _autoStreaming = false;
+
+  /// 服务器因空闲结束了会话：不主动重连（否则服务器每分钟说一句告别语），
+  /// 等本地 VAD 听到有人开口再握手
+  bool _idleClosed = false;
+
+  /// 本地 VAD 触发重新握手后，若迟迟没有识别结果（多半是噪声），主动结束会话
+  Timer? _probeTimer;
+
+  /// [seconds] 内没有新的识别结果就静默结束会话：
+  /// 噪声误触发握手后 15s；一轮回答结束后 30s（否则服务器空闲 1 分钟会自己说告别语）
+  void _armProbe({int seconds = 15}) {
+    _probeTimer?.cancel();
+    _probeTimer = Timer(Duration(seconds: seconds), () {
+      if (!_inVoiceCall || voiceState.value == XiaozhiVoiceState.speaking) {
+        return;
+      }
+      print('$TAG: $seconds 秒无识别结果，静默结束会话');
+      if (kDebugMode) _dumpDebugUtterance();
+      _autoStreaming = false;
+      _idleClosed = true;
+      _mqttManager?.closeSession();
+    });
+  }
+
+  void _startAutoListen({bool userSpoke = false}) {
+    if (!_serverVad || !_inVoiceCall || !_micGateOpen) return;
+    if (userSpoke && _idleClosed) {
+      print('$TAG: 本地 VAD 听到开口，重新握手');
+      _idleClosed = false;
+      _armProbe();
+    }
+    if (!_sessionReady) {
+      if (_idleClosed) return;
+      _mqttManager?.ensureSession(); // hello 后再开始
+      return;
+    }
+    _sendListen('start', mode: 'auto');
+    _autoStreaming = true;
+    if (kDebugMode) {
+      _debugUtterance
+        ..clear()
+        ..addAll(_preroll);
+    }
+    // 握手期间缓存的开头音频先补发
+    for (final f in _preroll) {
+      _sendAudioChunk(f);
+    }
+    _preroll.clear();
+  }
+
+  bool get _sessionReady =>
+      _mqttManager == null ? _channelConnected : _mqttManager!.hasSession;
+
+  bool get _inVoiceCall =>
+      _isVoiceCallActive && _audioStreamSubscription != null;
+
+  /// 重新进入"等待开口"状态（麦克风打开，但不上传）
+  void _resumeWaiting() {
+    _replyTimeout?.cancel();
+    _vad.reset();
+    _preroll.clear();
+    _utteranceActive = false;
+    _micGateOpen = true;
+    _autoStreaming = false;
+    voiceState.value = XiaozhiVoiceState.waiting;
+    _startAutoListen();
+    if (_serverVad && _sessionReady) _armProbe(seconds: 30);
+  }
+
+  void _sendListen(String state, {String mode = 'manual'}) {
+    _sendControlMessage({
+      'session_id': _sessionId,
+      'type': 'listen',
+      'state': state,
+      'mode': mode,
+    });
+  }
+
+  /// 处理一帧麦克风音频：本地 VAD 判断开口 / 说完
+  void _onVoiceFrame(VoiceFrame frame) {
+    if (!_micGateOpen) return;
+    final event = _vad.process(frame.db, voicing: frame.voicing);
+    if (++_vadLogCounter % 50 == 0) {
+      print(
+        '$TAG: VAD 音量 ${frame.db.toStringAsFixed(1)}dB, '
+        '底噪 ${_vad.noiseDb.toStringAsFixed(1)}dB, '
+        '阈值 ${_vad.thresholdDb.toStringAsFixed(1)}dB, '
+        '浊音度 ${frame.voicing.toStringAsFixed(2)}',
+      );
+    }
+
+    if (_serverVad) {
+      // 本地 VAD 只驱动界面；音频全部上传，由服务器断句
+      if (event == VadEvent.speechStart) {
+        voiceState.value = XiaozhiVoiceState.listening;
+        if (!_autoStreaming) _startAutoListen(userSpoke: true);
+      } else if (event == VadEvent.speechEnd &&
+          voiceState.value == XiaozhiVoiceState.listening) {
+        voiceState.value = XiaozhiVoiceState.waiting;
+      }
+      if (_autoStreaming) {
+        _sendAudioChunk(frame.opus);
+        if (kDebugMode && _debugUtterance.length < 500) {
+          _debugUtterance.add(frame.opus);
+        }
+      } else {
+        // 会话还没就绪：保留最近约 1.5s，握手后补发
+        _preroll.add(frame.opus);
+        if (_preroll.length > 25) _preroll.removeAt(0);
+      }
+      return;
+    }
+
+    if (!_utteranceActive) {
+      _preroll.add(frame.opus);
+      if (_preroll.length > _prerollFrames) _preroll.removeAt(0);
+      if (event == VadEvent.speechStart) _beginUtterance();
+      return;
+    }
+
+    if (kDebugMode) _debugUtterance.add(frame.opus);
+    if (_utterancePendingSession) {
+      _pendingFrames.add(frame.opus);
+    } else {
+      _sendAudioChunk(frame.opus);
+    }
+    if (event == VadEvent.speechEnd) _endUtterance();
+  }
+
+  void _beginUtterance() {
+    print(
+      '$TAG: VAD 检测到说话 (底噪 ${_vad.noiseDb.toStringAsFixed(1)}dB, '
+      '阈值 ${_vad.thresholdDb.toStringAsFixed(1)}dB)',
+    );
+    _utteranceActive = true;
+    voiceState.value = XiaozhiVoiceState.listening;
+    final buffered = List<Uint8List>.from(_preroll);
+    _preroll.clear();
+    if (kDebugMode) {
+      _debugUtterance
+        ..clear()
+        ..addAll(buffered);
+    }
+    if (_sessionReady) {
+      _sendListen('start');
+      for (final f in buffered) {
+        _sendAudioChunk(f);
+      }
+    } else {
+      // 会话过期：先握手，hello 后补发
+      _utterancePendingSession = true;
+      _pendingUtteranceEnded = false;
+      _pendingFrames
+        ..clear()
+        ..addAll(buffered);
+      _mqttManager?.ensureSession();
+    }
+  }
+
+  void _endUtterance() {
+    print(
+      '$TAG: VAD 说话结束，停止听 (${_debugUtterance.length} 帧, '
+      '约 ${_debugUtterance.length * 60}ms)',
+    );
+    if (kDebugMode) _dumpDebugUtterance();
+    _utteranceActive = false;
+    _micGateOpen = false; // 等机器人回答完再听
+    voiceState.value = XiaozhiVoiceState.thinking;
+    if (_utterancePendingSession) {
+      _pendingUtteranceEnded = true;
+    } else {
+      _sendListen('stop');
+    }
+    _armReplyTimeout();
+  }
+
+  /// 服务器没回答（没听清/被中断）时自动回到等待状态
+  void _armReplyTimeout() {
+    _replyTimeout?.cancel();
+    _replyTimeout = Timer(const Duration(seconds: 10), () {
+      if (_inVoiceCall && voiceState.value != XiaozhiVoiceState.speaking &&
+          !_micGateOpen) {
+        print('$TAG: 10 秒内无回答，重新等待说话');
+        _resumeWaiting();
+      }
+    });
+  }
+
+  Future<void> _dumpDebugUtterance() async {
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      final b = BytesBuilder();
+      for (final f in _debugUtterance) {
+        b.add([f.length >> 8, f.length & 0xFF]);
+        b.add(f);
+      }
+      await File('${dir.path}/last_utterance.bin').writeAsBytes(b.takeBytes());
+    } catch (e) {
+      print('$TAG: 保存调试语句失败: $e');
+    }
+  }
+
+  /// hello 后补发会话过期期间缓存的语句
+  void _flushPendingUtterance() {
+    if (!_utterancePendingSession) return;
+    _utterancePendingSession = false;
+    _sendListen('start');
+    for (final f in _pendingFrames) {
+      _sendAudioChunk(f);
+    }
+    _pendingFrames.clear();
+    if (_pendingUtteranceEnded) {
+      _pendingUtteranceEnded = false;
+      _sendListen('stop');
+    }
+  }
+
   /// 停止听说（语音通话模式）
   Future<void> stopListeningCall() async {
+    _micWatchdog?.cancel();
+    _resumeListenTimer?.cancel();
+    _replyTimeout?.cancel();
+    _utteranceActive = false;
+    _utterancePendingSession = false;
+    _pendingFrames.clear();
+    voiceState.value = XiaozhiVoiceState.idle;
     try {
       // 取消音频流订阅
       await _audioStreamSubscription?.cancel();
@@ -618,6 +924,7 @@ class XiaozhiService {
 
   /// 取消发送（上滑取消）
   Future<void> abortListening() async {
+    voiceState.value = XiaozhiVoiceState.idle;
     try {
       // 取消音频流订阅
       await _audioStreamSubscription?.cancel();
@@ -664,6 +971,7 @@ class XiaozhiService {
 
       case XiaozhiEventType.disconnected:
         _isConnected = false;
+        voiceState.value = XiaozhiVoiceState.idle;
         _dispatchEvent(
           XiaozhiServiceEvent(XiaozhiServiceEventType.disconnected, null),
         );
@@ -676,6 +984,8 @@ class XiaozhiService {
       case XiaozhiEventType.binaryMessage:
         // 处理二进制音频数据 - 简化直接播放
         final audioData = event.data as List<int>;
+        // 对误识别（噪声幻听）的回答不播放
+        if (_muteReply) break;
         AudioUtil.playOpusData(Uint8List.fromList(audioData));
         break;
 
@@ -721,11 +1031,31 @@ class XiaozhiService {
       // 根据消息类型分发事件
       switch (type) {
         case 'hello':
-          // 处理服务器的hello响应
-          if (_isVoiceCallActive && !_hasStartedCall) {
-            _hasStartedCall = true;
-            // 发送自动说话模式消息
-            startSpeaking();
+          // 服务器下行音频参数（官方服务器TTS为24000Hz）
+          final params = jsonData['audio_params'];
+          if (params is Map && params['sample_rate'] is int) {
+            AudioUtil.setOutputSampleRate(params['sample_rate'] as int);
+          }
+          // 会话过期期间开口说的话，hello 后补发
+          if (_inVoiceCall) {
+            _flushPendingUtterance();
+            _startAutoListen();
+          }
+          break;
+
+        case 'goodbye':
+          if (_inVoiceCall) {
+            // 会话超时结束：不立即重新握手（否则空闲时每分钟被服务器踢一次），
+            // 下次开口时 _beginUtterance 会先缓存音频再握手
+            _autoStreaming = false;
+            if (voiceState.value == XiaozhiVoiceState.thinking) {
+              _resumeWaiting();
+            } else if (_serverVad) {
+              // 空闲超时被结束：先别重连，等有人开口（见 _idleClosed）
+              _idleClosed = true;
+            }
+          } else {
+            voiceState.value = XiaozhiVoiceState.idle;
           }
           break;
 
@@ -741,7 +1071,54 @@ class XiaozhiService {
           final String state = jsonData['state'] ?? '';
           final String text = jsonData['text'] ?? '';
 
-          if (state == 'sentence_start' && text.isNotEmpty) {
+          if (state == 'start') {
+            // 机器人开始说话：暂停上传麦克风
+            _autoStreaming = false;
+            _drainToken++;
+            AudioUtil.beginReply();
+            _resumeListenTimer?.cancel();
+            _replyTimeout?.cancel();
+            _micGateOpen = false;
+            if (_utteranceActive) {
+              // 机器人主动说话时放弃当前语句
+              _utteranceActive = false;
+              _vad.reset();
+            }
+            voiceState.value = XiaozhiVoiceState.speaking;
+          } else if (state == 'stop') {
+            // _muteReply 保持到下一句真实识别结果：abort 之后服务器常常
+            // 还会接着说“Tạm biệt nhé!”之类的告别语，也不能播出来
+            // 说完后等待播放缓冲排空，再进入下一轮监听
+            _resumeListenTimer?.cancel();
+            final inCall =
+                _isVoiceCallActive && _audioStreamSubscription != null;
+            // 等排队中的音频真正播完，再留 700ms 让喇叭余音/房间回声散去，
+            // 否则麦克风会把机器人自己的话录进去
+            final token = ++_drainToken;
+            final stopAt = DateTime.now();
+            final left = AudioUtil.remainingPlayback;
+            AudioUtil.whenPlaybackDrained().then((_) {
+              print('$TAG: 播放排空用时 '
+                  '${DateTime.now().difference(stopAt).inMilliseconds}ms'
+                  '（tts stop 时估计剩余 ${left.inMilliseconds}ms）');
+              if (token != _drainToken) return;
+              _resumeListenTimer?.cancel();
+              _resumeListenTimer = Timer(
+                const Duration(milliseconds: 700),
+                () {
+                  if (token != _drainToken) return;
+                  if (inCall && _inVoiceCall) {
+                    _resumeWaiting();
+                  } else if (voiceState.value ==
+                      XiaozhiVoiceState.speaking) {
+                    voiceState.value = XiaozhiVoiceState.idle;
+                  }
+                },
+              );
+            });
+          }
+
+          if (state == 'sentence_start' && text.isNotEmpty && !_muteReply) {
             print('$TAG: 收到TTS句子: $text');
             _dispatchEvent(
               XiaozhiServiceEvent(XiaozhiServiceEventType.textMessage, text),
@@ -752,7 +1129,24 @@ class XiaozhiService {
         case 'stt':
           // 处理语音识别结果
           final String text = jsonData['text'] ?? '';
+          if (isNoiseHallucination(text)) {
+            // 服务器 ASR 把背景噪声“听”成了视频片尾语：中断回答，继续等待
+            print('$TAG: 忽略噪声幻听识别结果: $text');
+            _muteReply = true;
+            _micGateOpen = false; // 服务器这一轮已结束监听，回答被丢弃后再重新开始
+            _autoStreaming = false;
+            _sendControlMessage({'session_id': _sessionId, 'type': 'abort'});
+            _armReplyTimeout(); // 若服务器不再发 tts stop，也要回到监听
+            break;
+          }
+          _muteReply = false;
           if (text.isNotEmpty) {
+            // 服务器已识别出一句话：停止上传，等待回答
+            _probeTimer?.cancel();
+            _micGateOpen = false;
+            _autoStreaming = false;
+            voiceState.value = XiaozhiVoiceState.thinking;
+            _armReplyTimeout();
             print('$TAG: 收到语音识别结果: $text');
             // 先分发用户消息事件
             _dispatchEvent(
@@ -860,6 +1254,7 @@ class XiaozhiService {
         'mode': mode,
       };
       _sendControlMessage(message);
+      voiceState.value = XiaozhiVoiceState.listening;
       print('$TAG: 已发送开始监听消息 (按住说话)');
 
       // 设置音频流订阅
@@ -891,6 +1286,7 @@ class XiaozhiService {
           'state': 'stop',
         };
         _sendControlMessage(message);
+        voiceState.value = XiaozhiVoiceState.thinking;
         print('$TAG: 已发送停止监听消息');
       }
     } catch (e) {
