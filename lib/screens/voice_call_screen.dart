@@ -1,6 +1,9 @@
 import '../widgets/voice_state_chip.dart';
+import '../widgets/face_view.dart';
+import '../services/face_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:provider/provider.dart';
 import 'package:ai_assistant/models/conversation.dart';
 import 'package:ai_assistant/models/message.dart';
@@ -37,10 +40,19 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
   late AnimationController _animationController;
   final List<double> _audioLevels = List.filled(30, 0.05);
   Timer? _audioVisualizerTimer;
+  late FaceController _faceController;
+  bool _showControls = true;
+  Timer? _faceOverlayTimer;
 
   @override
   void initState() {
     super.initState();
+
+    _faceController = FaceController(
+      voiceStateListenable: _xiaozhiService.voiceState,
+      emotionListenable: _xiaozhiService.emotion,
+    );
+    _loadFacePreference();
 
     // 设置状态栏为透明并使图标为白色
     SystemChrome.setSystemUIOverlayStyle(
@@ -120,11 +132,32 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
     _callTimer?.cancel();
     _audioVisualizerTimer?.cancel();
     _animationController.dispose();
+    _faceController.dispose();
+    _faceOverlayTimer?.cancel();
 
     // 确保停止所有音频播放
     _xiaozhiService.stopPlayback();
 
     super.dispose();
+  }
+
+  Future<void> _loadFacePreference() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) {
+      setState(() {
+        _showControls = prefs.getBool('face_enabled') ?? true;
+      });
+    }
+  }
+
+  void _showControlsTemporarily() {
+    if (!_showControls) {
+      setState(() => _showControls = true);
+    }
+    _faceOverlayTimer?.cancel();
+    _faceOverlayTimer = Timer(const Duration(seconds: 5), () {
+      if (mounted) setState(() => _showControls = false);
+    });
   }
 
   void _connectToVoiceService() async {
@@ -354,9 +387,19 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
             ),
           ),
 
-          // 主要内容
-          Center(
-            child: Column(
+          // Khuôn mặt cảm xúc toàn màn hình (Việc 2)
+          Positioned.fill(
+            child: FaceView(controller: _faceController),
+          ),
+
+          // Lớp điều khiển (avatar, trạng thái, nút) — ẩn sau 5 giây, chạm màn hình hiện lại
+          if (_showControls)
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTap: _showControlsTemporarily,
+                child: Center(
+                  child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 // 圆形头像
@@ -496,6 +539,8 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
               ],
             ),
           ),
+        ),
+        ),
         ],
       ),
     );
