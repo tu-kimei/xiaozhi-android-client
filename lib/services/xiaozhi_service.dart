@@ -119,6 +119,12 @@ class XiaozhiService {
     XiaozhiVoiceState.idle,
   );
 
+  /// 机器人当前讲述的感性情绪（来自服务器 llm 消息的 emotion 字段），
+  /// 界面（FaceView）通过 ValueListenableBuilder 监听以切换表情。
+  /// 取值为小写英文 emotion 名称（happy / sad / surprised ...），
+  /// 未知值回落到 neutral。
+  final ValueNotifier<String> emotion = ValueNotifier('neutral');
+
   /// 工厂构造函数，实现单例模式
   factory XiaozhiService({
     required String websocketUrl,
@@ -1010,6 +1016,21 @@ class XiaozhiService {
     }
   }
 
+  /// 从消息里提取 emotion 并刷新 [emotion] 通知器。
+  ///
+  /// 服务器可能把 emotion 放在 `llm`、`tts` 或独立的 `emotion` 消息里，
+  /// 也可能不带。这里统一取一次，供 FaceView（Việc 2）绘制表情。
+  void _updateEmotionFromMessage(Map<String, dynamic> jsonData) {
+    final raw = jsonData['emotion'];
+    if (raw is! String) return;
+    final value = raw.trim().toLowerCase();
+    if (value.isEmpty) return;
+    if (emotion.value != value) {
+      print('$TAG: 表情更新: $value');
+      emotion.value = value;
+    }
+  }
+
   /// 处理文本消息
   void _handleTextMessage(String message) {
     print('$TAG: 收到文本消息: $message');
@@ -1027,6 +1048,9 @@ class XiaozhiService {
         _sessionId = jsonData['session_id'];
         print('$TAG: 更新会话ID: $_sessionId');
       }
+
+      // emotion 字段可能附带在 llm/tts/emotion 消息里，统一在分发前刷新
+      _updateEmotionFromMessage(jsonData);
 
       // 根据消息类型分发事件
       switch (type) {
@@ -1102,6 +1126,8 @@ class XiaozhiService {
                   '${DateTime.now().difference(stopAt).inMilliseconds}ms'
                   '（tts stop 时估计剩余 ${left.inMilliseconds}ms）');
               if (token != _drainToken) return;
+              // Keep the reply's expression while its buffered audio plays.
+              emotion.value = 'neutral';
               _resumeListenTimer?.cancel();
               _resumeListenTimer = Timer(
                 const Duration(milliseconds: 700),
@@ -1155,18 +1181,13 @@ class XiaozhiService {
           }
           break;
 
+        case 'llm':
+          // 服务器回复的文本与情绪。情绪已在上面单独处理，文本由 tts
+          // 的 sentence_start 负责呈现，这里不再分发，避免界面收到重复内容。
+          break;
+
         case 'emotion':
-          // 处理表情消息
-          final String emotion = jsonData['emotion'] ?? '';
-          if (emotion.isNotEmpty) {
-            print('$TAG: 收到表情消息: $emotion');
-            _dispatchEvent(
-              XiaozhiServiceEvent(
-                XiaozhiServiceEventType.textMessage,
-                'Cảm xúc: $emotion',
-              ),
-            );
-          }
+          // 兼容独立的情绪消息（服务器也可能把它并入 llm 消息）
           break;
 
         default:

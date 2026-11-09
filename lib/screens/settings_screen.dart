@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'dart:math' as math;
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:ai_assistant/providers/theme_provider.dart';
 import 'package:ai_assistant/providers/config_provider.dart';
 import 'package:ai_assistant/models/xiaozhi_config.dart';
@@ -34,10 +35,12 @@ class _SettingsScreenState extends State<SettingsScreen>
 
   late TabController _tabController;
   int _currentTabIndex = 0;
+  bool _faceEnabled = true;
 
   @override
   void initState() {
     super.initState();
+    _loadFacePreference();
     final configProvider = Provider.of<ConfigProvider>(context, listen: false);
 
     // 保存Provider引用，以便在dispose中安全使用
@@ -58,6 +61,15 @@ class _SettingsScreenState extends State<SettingsScreen>
 
   // 存储ConfigProvider引用，避免在dispose中访问context
   late final ConfigProvider _configProvider;
+
+  void _loadFacePreference() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) {
+      setState(() {
+        _faceEnabled = prefs.getBool('face_enabled') ?? true;
+      });
+    }
+  }
 
   @override
   void dispose() {
@@ -231,6 +243,59 @@ class _SettingsScreenState extends State<SettingsScreen>
                     },
                   ),
                 ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            _buildCard(
+              title: 'Khuôn mặt cảm xúc',
+              subtitle: 'Mặt hoạt hình hiển thị trong cuộc gọi thoại',
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 20,
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Expanded(
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 24,
+                            height: 24,
+                            child: const Icon(
+                              Icons.emoji_emotions_outlined,
+                              color: Colors.black,
+                              size: 22,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          const Flexible(
+                            child: Text(
+                              'Hiện mặt khi gọi',
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Switch.adaptive(
+                      value: _faceEnabled,
+                      onChanged: (value) async {
+                        setState(() => _faceEnabled = value);
+                        final prefs = await SharedPreferences.getInstance();
+                        await prefs.setBool('face_enabled', value);
+                      },
+                      activeColor: Colors.black,
+                      inactiveTrackColor: const Color(0xFFE0E0E0),
+                    ),
+                  ],
+                ),
               ),
             ),
           ],
