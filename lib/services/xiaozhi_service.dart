@@ -1110,8 +1110,6 @@ class XiaozhiService {
             }
             voiceState.value = XiaozhiVoiceState.speaking;
           } else if (state == 'stop') {
-            // 机器人说完本轮，表情回落到 neutral，避免一直挂着上一句的情绪
-            emotion.value = 'neutral';
             // _muteReply 保持到下一句真实识别结果：abort 之后服务器常常
             // 还会接着说“Tạm biệt nhé!”之类的告别语，也不能播出来
             // 说完后等待播放缓冲排空，再进入下一轮监听
@@ -1128,6 +1126,8 @@ class XiaozhiService {
                   '${DateTime.now().difference(stopAt).inMilliseconds}ms'
                   '（tts stop 时估计剩余 ${left.inMilliseconds}ms）');
               if (token != _drainToken) return;
+              // Keep the reply's expression while its buffered audio plays.
+              emotion.value = 'neutral';
               _resumeListenTimer?.cancel();
               _resumeListenTimer = Timer(
                 const Duration(milliseconds: 700),

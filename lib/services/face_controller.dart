@@ -21,6 +21,7 @@ enum RobotFaceEmotion {
 class FaceController extends ChangeNotifier {
   final ValueListenable<XiaozhiVoiceState> voiceStateListenable;
   final ValueListenable<String> emotionListenable;
+  final ValueListenable<bool> playbackActiveListenable;
 
   RobotFaceEmotion _currentEmotion = RobotFaceEmotion.neutral;
   bool _isSpeaking = false;
@@ -30,9 +31,11 @@ class FaceController extends ChangeNotifier {
   FaceController({
     required this.voiceStateListenable,
     required this.emotionListenable,
+    required this.playbackActiveListenable,
   }) {
     voiceStateListenable.addListener(_onStateChanged);
     emotionListenable.addListener(_onStateChanged);
+    playbackActiveListenable.addListener(_onStateChanged);
     _recompute();
   }
 
@@ -50,9 +53,13 @@ class FaceController extends ChangeNotifier {
     final vState = voiceStateListenable.value;
     final rawEmotion = emotionListenable.value.toLowerCase().trim();
 
-    _isSpeaking = vState == XiaozhiVoiceState.speaking;
-    _isListening = vState == XiaozhiVoiceState.listening;
-    _isThinking = vState == XiaozhiVoiceState.thinking;
+    _isSpeaking = playbackActiveListenable.value;
+    _isListening = !_isSpeaking && vState == XiaozhiVoiceState.listening;
+    // A TTS start announces incoming audio; it can still be buffering.
+    _isThinking =
+        !_isSpeaking &&
+        (vState == XiaozhiVoiceState.thinking ||
+            vState == XiaozhiVoiceState.speaking);
 
     if (_isThinking) {
       _currentEmotion = RobotFaceEmotion.thinking;
@@ -60,8 +67,8 @@ class FaceController extends ChangeNotifier {
     }
 
     if (_isListening) {
-      // 正在听时睁大双眼，带着微微的好奇/微笑
-      _currentEmotion = RobotFaceEmotion.surprised;
+      // Calm attentive eyes; FacePainter adds a small closed-mouth smile.
+      _currentEmotion = RobotFaceEmotion.neutral;
       return;
     }
 
@@ -118,6 +125,7 @@ class FaceController extends ChangeNotifier {
   void dispose() {
     voiceStateListenable.removeListener(_onStateChanged);
     emotionListenable.removeListener(_onStateChanged);
+    playbackActiveListenable.removeListener(_onStateChanged);
     super.dispose();
   }
 }

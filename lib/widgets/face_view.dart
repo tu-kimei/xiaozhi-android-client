@@ -18,10 +18,14 @@ class FaceView extends StatefulWidget {
   /// 关闭时不绘制任何动画，只留一个纯色背景（设置项用）。
   final bool enabled;
 
+  /// 点击回调（用于显示/隐藏控制栏）。
+  final VoidCallback? onTap;
+
   const FaceView({
     super.key,
     required this.controller,
     this.enabled = true,
+    this.onTap,
   });
 
   @override
@@ -29,7 +33,7 @@ class FaceView extends StatefulWidget {
 }
 
 class _FaceViewState extends State<FaceView>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   static const Duration _blinkDuration = Duration(milliseconds: 150);
 
   late final AnimationController _blink;
@@ -95,17 +99,21 @@ class _FaceViewState extends State<FaceView>
       animation: Listenable.merge([_blink, _pulse]),
       builder: (context, _) {
         if (!widget.enabled) return const SizedBox.expand();
-        return CustomPaint(
-          size: Size.infinite,
-          painter: FacePainter(
-            emotion: c.currentEmotion,
-            isListening: c.isListening,
-            isThinking: c.isThinking,
-            isSpeaking: c.isSpeaking,
-            blink: _blink.value,
-            mouthOpen: c.isSpeaking
-                ? 0.25 + 0.75 * _pulse.value.abs()
-                : 0.0,
+        return GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onTap: widget.onTap,
+          child: CustomPaint(
+            size: Size.infinite,
+            painter: FacePainter(
+              emotion: c.currentEmotion,
+              isListening: c.isListening,
+              isThinking: c.isThinking,
+              isSpeaking: c.isSpeaking,
+              blink: _blink.value,
+              mouthOpen: c.isSpeaking
+                  ? 0.25 + 0.75 * _pulse.value.abs()
+                  : 0.0,
+            ),
           ),
         );
       },
@@ -131,7 +139,7 @@ class FacePainter extends CustomPainter {
     required this.mouthOpen,
   });
 
-  static const Color _ink = Color(0xFF1B1B1F);
+  static const Color _ink = Color(0xFFFFFDF7);
   static const Color _paper = Color(0xFFFFFDF7);
   static const Color _accent = Color(0xFFFF7A59);
 
@@ -168,6 +176,11 @@ class FacePainter extends CustomPainter {
   }
 
   void _drawEyes(Canvas canvas, Offset left, Offset right, double r) {
+    if (isListening) {
+      _drawLidEye(canvas, left, r * 0.85, 1.0 - blink);
+      _drawLidEye(canvas, right, r * 0.85, 1.0 - blink);
+      return;
+    }
     switch (emotion) {
       case RobotFaceEmotion.happy:
         _drawArcEye(canvas, left, r, curveUp: true);
@@ -287,6 +300,15 @@ class FacePainter extends CustomPainter {
 
   void _drawMouth(Canvas canvas, Offset c, double radius) {
     final width = radius * 0.62;
+    if (isListening) {
+      final smile = Path()
+        ..moveTo(c.dx - width * 0.35, c.dy)
+        ..quadraticBezierTo(
+          c.dx, c.dy + radius * 0.10, c.dx + width * 0.35, c.dy,
+        );
+      canvas.drawPath(smile, _stroke);
+      return;
+    }
     if (isSpeaking) {
       final h = radius * 0.10 + mouthOpen * radius * 0.34;
       canvas.drawRRect(
