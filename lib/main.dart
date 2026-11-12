@@ -27,14 +27,9 @@ void main() async {
   // 设置全局沉浸式导航栏
   await _setupSystemUI();
 
-  // 设置状态栏颜色变化监听器，确保状态栏样式始终如一
-  SystemChannels.lifecycle.setMessageHandler((msg) async {
-    if (msg == AppLifecycleState.resumed.toString()) {
-      // 应用回到前台时重新应用系统UI设置
-      await _setupSystemUI();
-    }
-    return null;
-  });
+  // Observe lifecycle without replacing Flutter's own channel handler. It
+  // drives frame scheduling and the robot's stop-on-background observer.
+  AppLifecycleListener(onResume: _setupSystemUI);
 
   // 设置高性能渲染
   if (Platform.isAndroid || Platform.isIOS) {

@@ -31,6 +31,24 @@ class RobotService {
     'com.lhht.ai_assistant/robot',
   );
 
+  /// Keep the face visible only while the call route is open.
+  static Future<void> keepScreenOn(bool enabled) async {
+    try {
+      await _channel.invokeMethod('keepScreenOn', {'enabled': enabled});
+    } on MissingPluginException {
+      // Non-Android clients still use the simple face.
+    }
+  }
+
+  /// One cancellable native series; durations are executed by the motor service.
+  static Future<Map<dynamic, dynamic>?> motionSeries(
+    String kind,
+    List<Map<String, num>> poses,
+  ) => _channel.invokeMethod<Map<dynamic, dynamic>>('motionSeries', {
+    'kind': kind,
+    'poses': poses,
+  });
+
   /// 是否运行在带 ROSA 系统的机器人上
   static Future<bool> isAvailable() async {
     try {

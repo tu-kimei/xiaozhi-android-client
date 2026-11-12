@@ -28,6 +28,10 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        // Flutter's arm-only build must also filter native inference plugins.
+        if (project.findProperty("target-platform") == "android-arm") {
+            ndk { abiFilters += "armeabi-v7a" }
+        }
     }
 
     buildTypes {

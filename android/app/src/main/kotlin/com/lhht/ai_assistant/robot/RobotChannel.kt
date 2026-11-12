@@ -1,6 +1,8 @@
 package com.lhht.ai_assistant.robot
 
 import android.content.Context
+import android.app.Activity
+import android.view.WindowManager
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -30,6 +32,24 @@ class RobotChannel(private val context: Context, messenger: BinaryMessenger) :
 
     @Volatile
     private var currentMove: RosaClient.CallHandle? = null
+    @Volatile
+    private var currentHead: RosaClient.CallHandle? = null
+    @Volatile
+    private var moveReply: Reply? = null
+    @Volatile
+    private var headReply: Reply? = null
+
+    private fun cancelMotion() {
+        currentMove?.let { client.cancel(it) }
+        currentHead?.let { client.cancel(it) }
+        currentMove = null
+        currentHead = null
+        val canceled = mapOf("result" to "canceled", "message" to "Động tác đã bị dừng")
+        moveReply?.ok(canceled)
+        headReply?.ok(canceled)
+        moveReply = null
+        headReply = null
+    }
 
     init {
         channel.setMethodCallHandler(this)
@@ -37,12 +57,21 @@ class RobotChannel(private val context: Context, messenger: BinaryMessenger) :
 
     fun dispose() {
         channel.setMethodCallHandler(null)
-        worker.execute { client.disconnect() }
+        worker.execute { cancelMotion(); client.disconnect() }
         worker.shutdown()
     }
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
+            "keepScreenOn" -> {
+                val window = (context as? Activity)?.window
+                if (call.argument<Boolean>("enabled") == true) {
+                    window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                } else {
+                    window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                }
+                result.success(null)
+            }
             "isAvailable" -> result.success(isMasterInstalled())
             "servoDevices" -> runAsync(result) { reply ->
                 client.servoDevices { devices, response ->
@@ -69,16 +98,28 @@ class RobotChannel(private val context: Context, messenger: BinaryMessenger) :
                 }
             }
             "head" -> runAsync(result) { reply ->
+                currentHead?.let { client.cancel(it) }
+                headReply?.ok(mapOf("result" to "canceled"))
                 val option = RosaClient.RotationOption(
                     servoId = call.argument<String>("servoId") ?: "head",
                     angle = call.floatArg("angle"),
                     angleAbsolute = call.argument<Boolean>("relative") != true,
                     speed = call.floatArg("speed"),
                 )
-                client.rotate(option, finalResponse(reply))
+                headReply = reply
+                var handle: RosaClient.CallHandle? = null
+                handle = client.rotate(option) { response ->
+                    if (response.resultType != RosaClient.RESULT_STICKILY) {
+                        if (currentHead == handle) { currentHead = null; headReply = null }
+                        reply.response(response)
+                    }
+                }
+                currentHead = handle
             }
             "move" -> runAsync(result) { reply ->
                 currentMove?.let { client.cancel(it) }
+                moveReply?.ok(mapOf("result" to "canceled"))
+                moveReply = reply
                 val option = RosaClient.LocomotionOption(
                     movingSpeed = call.floatArg("speed"),
                     movingAngle = call.floatArg("angle"),
@@ -90,15 +131,57 @@ class RobotChannel(private val context: Context, messenger: BinaryMessenger) :
                 var handle: RosaClient.CallHandle? = null
                 handle = client.locomote(option) { response ->
                     if (response.resultType != RosaClient.RESULT_STICKILY) {
-                        if (currentMove == handle) currentMove = null
+                        if (currentMove == handle) { currentMove = null; moveReply = null }
                         reply.response(response)
                     }
                 }
                 currentMove = handle
             }
+            "motionSeries" -> runAsync(result) { reply ->
+                val kind = call.argument<String>("kind")
+                val poses = call.argument<List<Map<String, Number>>>("poses") ?: emptyList()
+                require(poses.size in 1..16) { "Invalid motion series" }
+                val durations = poses.map { (it["durationMs"] ?: 0).toLong() }
+                require(durations.all { it in 60..1500 } && durations.sum() <= 6000)
+                if (kind == "head") {
+                    val options = poses.mapIndexed { index, pose ->
+                        val angle = pose["angle"]!!.toFloat()
+                        require(angle in -23f..25f)
+                        RosaClient.RotationOption("head", angle, durationMs = durations[index])
+                    }
+                    currentHead?.let { client.cancel(it) }
+                    headReply?.ok(mapOf("result" to "canceled"))
+                    headReply = reply
+                    var handle: RosaClient.CallHandle? = null
+                    handle = client.rotateSeries(options) { response ->
+                        if (response.resultType != RosaClient.RESULT_STICKILY) {
+                            if (currentHead == handle) { currentHead = null; headReply = null }
+                            reply.response(response)
+                        }
+                    }
+                    currentHead = handle
+                } else {
+                    require(kind == "wheels")
+                    val options = poses.mapIndexed { index, pose ->
+                        val speed = pose["speed"]!!.toFloat()
+                        require(speed in -2f..2f && speed != 0f)
+                        RosaClient.LocomotionOption(movingSpeed = speed, durationMs = durations[index])
+                    }
+                    currentMove?.let { client.cancel(it) }
+                    moveReply?.ok(mapOf("result" to "canceled"))
+                    moveReply = reply
+                    var handle: RosaClient.CallHandle? = null
+                    handle = client.locomoteSeries(options) { response ->
+                        if (response.resultType != RosaClient.RESULT_STICKILY) {
+                            if (currentMove == handle) { currentMove = null; moveReply = null }
+                            reply.response(response)
+                        }
+                    }
+                    currentMove = handle
+                }
+            }
             "stop" -> runAsync(result) { reply ->
-                currentMove?.let { client.cancel(it) }
-                currentMove = null
+                cancelMotion()
                 reply.ok(null)
             }
             else -> result.notImplemented()

@@ -1,3 +1,4 @@
+import '../services/robot_preferences.dart';
 import 'package:flutter/material.dart';
 import 'dart:math' as math;
 import 'package:provider/provider.dart';
@@ -11,6 +12,7 @@ import 'package:ai_assistant/widgets/settings_section.dart';
 import 'package:ai_assistant/services/dify_service.dart';
 import 'package:ai_assistant/services/xiaozhi_ota_service.dart';
 import 'package:ai_assistant/screens/xiaozhi_activation_screen.dart';
+import '../widgets/robot_settings_panel.dart';
 
 // 引入main.dart中定义的常量
 import 'package:ai_assistant/main.dart' show enableDebugTools;
@@ -36,10 +38,12 @@ class _SettingsScreenState extends State<SettingsScreen>
   late TabController _tabController;
   int _currentTabIndex = 0;
   bool _faceEnabled = true;
+  String _faceStyle = 'simple';
 
   @override
   void initState() {
     super.initState();
+    RobotPreferences.instance.addListener(_syncFacePreference);
     _loadFacePreference();
     final configProvider = Provider.of<ConfigProvider>(context, listen: false);
 
@@ -47,7 +51,7 @@ class _SettingsScreenState extends State<SettingsScreen>
     _configProvider = configProvider;
 
     // 初始化选项卡控制器
-    _tabController = TabController(length: 4, vsync: this);
+    _tabController = TabController(length: 5, vsync: this);
     _tabController.addListener(() {
       if (_tabController.indexIsChanging) {
         setState(() {
@@ -62,17 +66,22 @@ class _SettingsScreenState extends State<SettingsScreen>
   // 存储ConfigProvider引用，避免在dispose中访问context
   late final ConfigProvider _configProvider;
 
+  void _syncFacePreference() {
+    if (!mounted) return;
+    setState(() {
+      _faceEnabled = RobotPreferences.instance.faceEnabled;
+      _faceStyle = RobotPreferences.instance.faceStyle;
+    });
+  }
+
   void _loadFacePreference() async {
-    final prefs = await SharedPreferences.getInstance();
-    if (mounted) {
-      setState(() {
-        _faceEnabled = prefs.getBool('face_enabled') ?? true;
-      });
-    }
+    await RobotPreferences.instance.load();
+    _syncFacePreference();
   }
 
   @override
   void dispose() {
+    RobotPreferences.instance.removeListener(_syncFacePreference);
     // 移除监听器
     _configProvider.removeListener(_updateDifyControllers);
 
@@ -121,6 +130,7 @@ class _SettingsScreenState extends State<SettingsScreen>
                 _buildDifyConfigTab(),
                 _buildMiniMaxConfigTab(),
                 _buildXiaozhiConfigTab(),
+                const RobotSettingsPanel(),
               ],
             ),
           ),
@@ -148,6 +158,8 @@ class _SettingsScreenState extends State<SettingsScreen>
           ],
         ),
         child: TabBar(
+          isScrollable: true,
+          tabAlignment: TabAlignment.start,
           controller: _tabController,
           indicator: BoxDecoration(
             color: Colors.white,
@@ -164,7 +176,7 @@ class _SettingsScreenState extends State<SettingsScreen>
             horizontal: 4,
             vertical: 3,
           ),
-          labelPadding: EdgeInsets.zero,
+          labelPadding: const EdgeInsets.symmetric(horizontal: 16),
           padding: EdgeInsets.zero,
           indicatorSize: TabBarIndicatorSize.tab,
           labelColor: Colors.black,
@@ -180,7 +192,7 @@ class _SettingsScreenState extends State<SettingsScreen>
             fontWeight: FontWeight.w500,
             fontSize: 16,
           ),
-          tabs: const [Tab(text: 'Chung'), Tab(text: 'Dify'), Tab(text: 'MiniMax'), Tab(text: 'Xiaozhi')],
+          tabs: const [Tab(text: 'Chung'), Tab(text: 'Dify'), Tab(text: 'MiniMax'), Tab(text: 'Xiaozhi'), Tab(text: 'Robot')],
         ),
       ),
     );
@@ -290,6 +302,7 @@ class _SettingsScreenState extends State<SettingsScreen>
                         setState(() => _faceEnabled = value);
                         final prefs = await SharedPreferences.getInstance();
                         await prefs.setBool('face_enabled', value);
+                        await RobotPreferences.instance.update(showFace: value);
                       },
                       activeColor: Colors.black,
                       inactiveTrackColor: const Color(0xFFE0E0E0),
@@ -297,6 +310,23 @@ class _SettingsScreenState extends State<SettingsScreen>
                   ],
                 ),
               ),
+            ),
+            const SizedBox(height: 8),
+            DropdownButtonFormField<String>(
+              value: _faceStyle,
+              decoration: const InputDecoration(labelText: 'Bộ mặt khi gọi'),
+              items: const [
+                DropdownMenuItem(value: 'simple', child: Text('VAG — mặt vector')),
+                DropdownMenuItem(value: 'visbot', child: Text('SVGA — mắt Visbot')),
+              ],
+              isExpanded: true,
+              onChanged: (value) async {
+                if (value == null) return;
+                setState(() => _faceStyle = value);
+                final prefs = await SharedPreferences.getInstance();
+                await prefs.setString('face_style', value);
+                await RobotPreferences.instance.update(face: value);
+              },
             ),
           ],
         ),

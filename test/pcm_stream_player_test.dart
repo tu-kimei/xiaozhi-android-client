@@ -10,17 +10,17 @@ void main() {
   final messenger =
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
 
-  Future<void> outputState(bool active) async {
+  Future<void> outputEvent(String method, dynamic value) async {
     final done = Completer<void>();
     messenger.handlePlatformMessage(
       channel.name,
-      const StandardMethodCodec().encodeMethodCall(
-        MethodCall('playbackState', active),
-      ),
+      const StandardMethodCodec().encodeMethodCall(MethodCall(method, value)),
       (_) => done.complete(),
     );
     await done.future;
   }
+
+  Future<void> outputState(bool active) => outputEvent('playbackState', active);
 
   setUp(() {
     messenger.setMockMethodCallHandler(channel, (_) async => null);
@@ -48,6 +48,29 @@ void main() {
       await outputState(true);
       await player.release();
       expect(PcmStreamPlayer.playbackActive.value, isFalse);
+    },
+  );
+  test(
+    'mouth level follows audible RMS, ignores queued levels and resets',
+    () async {
+      final player = PcmStreamPlayer();
+      await player.stop();
+      await outputEvent('playbackLevel', .7);
+      expect(PcmStreamPlayer.playbackLevel.value, 0);
+      await outputState(true);
+      await outputEvent('playbackLevel', .7);
+      expect(PcmStreamPlayer.playbackLevel.value, .7);
+      await outputEvent('playbackLevel', 0.0); // silence inside a sentence
+      expect(PcmStreamPlayer.playbackLevel.value, 0);
+      await outputEvent('playbackLevel', 2.0);
+      expect(PcmStreamPlayer.playbackLevel.value, 1);
+      await outputState(false);
+      expect(PcmStreamPlayer.playbackLevel.value, 0);
+      await outputState(true);
+      await outputEvent('playbackLevel', .5);
+      await player.stop();
+      expect(PcmStreamPlayer.playbackLevel.value, 0);
+      await player.release();
     },
   );
 }

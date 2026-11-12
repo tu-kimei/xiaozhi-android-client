@@ -1,3 +1,4 @@
+import 'mcp/standby_tools.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
@@ -13,6 +14,12 @@ import '../utils/device_util.dart';
 import '../utils/audio_util.dart';
 import '../utils/voice_activity_detector.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
+import 'mcp/mcp_server.dart';
+import 'mcp/robot_tools.dart';
+import 'robot_motion_controller.dart';
+import 'robot_motion_audio_policy.dart';
+import 'robot_preferences.dart';
+import 'robot_service.dart';
 
 /// 小智服务事件类型
 enum XiaozhiServiceEventType {
@@ -73,16 +80,70 @@ class XiaozhiService {
   final List<XiaozhiServiceListener> _listeners = [];
   StreamSubscription? _audioStreamSubscription;
   bool _isVoiceCallActive = false;
+  bool _screenStandby = false;
+  bool get screenStandby => _screenStandby;
+  // Installed only while the call route owns the local wake listener.
+  Future<void> Function()? onSleepRequested;
   WebSocketChannel? _ws;
   bool _hasStartedCall = false;
   MessageListener? _messageListener;
+  bool _robotAvailable = false;
+  Future<void>? _robotReady;
+  late final McpServer _mcpServer = _createMcpServer();
+
+  McpServer _createMcpServer() {
+    final server = McpServer(
+      beforeRequest: () => _robotReady ??= _prepareRobot(),
+    );
+    registerStandbyTools(
+      server,
+      sleep: () async {
+        final request = onSleepRequested;
+        if (request == null || !_inVoiceCall) {
+          throw StateError('Mở cuộc gọi với robot trước khi yêu cầu đi ngủ.');
+        }
+        await request();
+      },
+    );
+    registerRobotTools(
+      server,
+      RobotMotionController.instance,
+      RobotPreferences.instance,
+      available: () => _robotAvailable && !_screenStandby,
+    );
+    return server;
+  }
+
+  Future<void> _prepareRobot() async {
+    await RobotPreferences.instance.load();
+    _robotAvailable = await RobotService.isAvailable().timeout(
+      const Duration(seconds: 2),
+      onTimeout: () => false,
+    );
+  }
+
+  Future<void> _handleMcp(dynamic payload, String? session) async {
+    print('$TAG: MCP in: ${jsonEncode(payload)}');
+    final response = await _mcpServer.handle(payload);
+    if (response != null && session == _sessionId && _channelConnected) {
+      print('$TAG: MCP out: ${jsonEncode(response)}');
+      _sendControlMessage({
+        'session_id': session,
+        'type': 'mcp',
+        'payload': response,
+      });
+    }
+  }
 
   // 机器人说话(TTS)时暂停上传麦克风，避免设备没有回声消除时听到自己的声音
   bool _micGateOpen = true;
+  final _motionAudioPolicy = RobotMotionAudioPolicy();
   Timer? _resumeListenTimer;
 
   // —— 语音通话：本地 VAD 决定何时开始/停止听（manual 模式）——
-  final VoiceActivityDetector _vad = VoiceActivityDetector();
+  VoiceActivityDetector _vad = VoiceActivityDetector();
+  VoiceSensitivity _vadSensitivity = VoiceSensitivity.normal;
+  int _vadSilenceMs = 780;
   static const int _prerollFrames = 8; // 约 480ms，避免丢掉第一个字
   final List<Uint8List> _preroll = [];
   bool _utteranceActive = false;
@@ -109,6 +170,7 @@ class XiaozhiService {
         t.contains('thực hiện hành động này trên youtube') ||
         t.contains('kênh youtube');
   }
+
   Timer? _micWatchdog;
   int _vadLogCounter = 0;
   // 调试：保存最近一句上传的 Opus 帧，便于离线检查（仅 debug 构建）
@@ -124,6 +186,7 @@ class XiaozhiService {
   /// 取值为小写英文 emotion 名称（happy / sad / surprised ...），
   /// 未知值回落到 neutral。
   final ValueNotifier<String> emotion = ValueNotifier('neutral');
+  final ValueNotifier<String> replyText = ValueNotifier('');
 
   /// 工厂构造函数，实现单例模式
   factory XiaozhiService({
@@ -195,6 +258,7 @@ class XiaozhiService {
 
   /// 切换到普通聊天模式
   Future<void> switchToChatMode() async {
+    await RobotMotionController.instance.stop();
     // 如果已经在普通聊天模式，直接返回
     if (!_isVoiceCallActive) return;
 
@@ -366,6 +430,7 @@ class XiaozhiService {
 
   /// 断开小智服务连接
   Future<void> disconnect() async {
+    await RobotMotionController.instance.stop();
     try {
       // 取消音频流订阅
       await _audioStreamSubscription?.cancel();
@@ -579,6 +644,7 @@ class XiaozhiService {
 
   /// 开始听说（语音通话模式）
   Future<void> startListeningCall() async {
+    _screenStandby = false;
     try {
       // 确保已经有会话ID
       if (_sessionId == null) {
@@ -650,7 +716,9 @@ class XiaozhiService {
   void _startMicWatchdog() {
     _micWatchdog?.cancel();
     _micWatchdog = Timer.periodic(const Duration(seconds: 3), (_) async {
-      if (!_inVoiceCall) return;
+      if (!_inVoiceCall ||
+          (_screenStandby && !RobotPreferences.instance.wakeWordEnabled))
+        return;
       final last = AudioUtil.lastFrameAt;
       final stale =
           last == null ||
@@ -703,7 +771,7 @@ class XiaozhiService {
   }
 
   void _startAutoListen({bool userSpoke = false}) {
-    if (!_serverVad || !_inVoiceCall || !_micGateOpen) return;
+    if (_screenStandby || !_serverVad || !_inVoiceCall || !_micGateOpen) return;
     if (userSpoke && _idleClosed) {
       print('$TAG: 本地 VAD 听到开口，重新握手');
       _idleClosed = false;
@@ -736,6 +804,7 @@ class XiaozhiService {
 
   /// 重新进入"等待开口"状态（麦克风打开，但不上传）
   void _resumeWaiting() {
+    if (_screenStandby) return;
     _replyTimeout?.cancel();
     _vad.reset();
     _preroll.clear();
@@ -745,6 +814,40 @@ class XiaozhiService {
     voiceState.value = XiaozhiVoiceState.waiting;
     _startAutoListen();
     if (_serverVad && _sessionReady) _armProbe(seconds: 30);
+  }
+
+  /// Keep recorder frames local while the screen is asleep.
+  Future<void> setScreenStandby(bool sleeping) async {
+    if (!sleeping && _inVoiceCall && !AudioUtil.isRecording) {
+      await AudioUtil.startRecording();
+    }
+    _screenStandby = sleeping;
+    _probeTimer?.cancel();
+    _drainToken++;
+    _resumeListenTimer?.cancel();
+    _replyTimeout?.cancel();
+    _autoStreaming = false;
+    _utteranceActive = false;
+    _preroll.clear();
+    _pendingFrames.clear();
+    _vad.reset();
+    if (sleeping) {
+      _micWatchdog?.cancel();
+      _micGateOpen = false;
+      if (_sessionReady) {
+        _sendControlMessage({'session_id': _sessionId, 'type': 'abort'});
+        _sendListen('stop');
+      }
+      await RobotMotionController.instance.stop();
+      await AudioUtil.stopPlaying();
+      if (!RobotPreferences.instance.wakeWordEnabled)
+        await AudioUtil.stopRecording();
+      voiceState.value = XiaozhiVoiceState.idle;
+    } else if (_inVoiceCall) {
+      _idleClosed = false;
+      _resumeWaiting();
+      _startMicWatchdog();
+    }
   }
 
   void _sendListen(String state, {String mode = 'manual'}) {
@@ -758,6 +861,30 @@ class XiaozhiService {
 
   /// 处理一帧麦克风音频：本地 VAD 判断开口 / 说完
   void _onVoiceFrame(VoiceFrame frame) {
+    if (_screenStandby) return;
+    final p = RobotPreferences.instance;
+    if (_vadSensitivity != p.sensitivity || _vadSilenceMs != p.silenceMs) {
+      _vadSensitivity = p.sensitivity;
+      _vadSilenceMs = p.silenceMs;
+      _vad = VoiceActivityDetector(
+        minSpeechDb: p.sensitivity.minSpeechDb,
+        speechMarginDb: p.sensitivity.marginDb,
+        endFrames: (p.silenceMs / 60).ceil(),
+      );
+    }
+    if (_motionAudioPolicy.syncMotion(
+      RobotMotionController.instance.moving.value,
+    )) {
+      _drainToken++;
+      _resumeListenTimer?.cancel();
+      unawaited(AudioUtil.stopPlaying());
+      _micGateOpen = true;
+      _autoStreaming = false;
+      _utteranceActive = false;
+      _vad.reset();
+      voiceState.value = XiaozhiVoiceState.waiting;
+      _startAutoListen();
+    }
     if (!_micGateOpen) return;
     final event = _vad.process(frame.db, voicing: frame.voicing);
     if (++_vadLogCounter % 50 == 0) {
@@ -858,7 +985,8 @@ class XiaozhiService {
   void _armReplyTimeout() {
     _replyTimeout?.cancel();
     _replyTimeout = Timer(const Duration(seconds: 10), () {
-      if (_inVoiceCall && voiceState.value != XiaozhiVoiceState.speaking &&
+      if (_inVoiceCall &&
+          voiceState.value != XiaozhiVoiceState.speaking &&
           !_micGateOpen) {
         print('$TAG: 10 秒内无回答，重新等待说话');
         _resumeWaiting();
@@ -976,6 +1104,15 @@ class XiaozhiService {
         break;
 
       case XiaozhiEventType.disconnected:
+        unawaited(RobotMotionController.instance.stop());
+        unawaited(AudioUtil.stopPlaying());
+        _drainToken++;
+        _resumeListenTimer?.cancel();
+        _replyTimeout?.cancel();
+        _micGateOpen = true;
+        _autoStreaming = false;
+        _utteranceActive = false;
+        _vad.reset();
         _isConnected = false;
         voiceState.value = XiaozhiVoiceState.idle;
         _dispatchEvent(
@@ -991,7 +1128,11 @@ class XiaozhiService {
         // 处理二进制音频数据 - 简化直接播放
         final audioData = event.data as List<int>;
         // 对误识别（噪声幻听）的回答不播放
-        if (_muteReply) break;
+        if (_screenStandby ||
+            _muteReply ||
+            _motionAudioPolicy.suppressTts ||
+            RobotMotionController.instance.moving.value)
+          break;
         AudioUtil.playOpusData(Uint8List.fromList(audioData));
         break;
 
@@ -1008,7 +1149,7 @@ class XiaozhiService {
     try {
       if (message is String) {
         _handleTextMessage(message);
-      } else if (message is List<int>) {
+      } else if (message is List<int> && !_screenStandby) {
         AudioUtil.playOpusData(Uint8List.fromList(message));
       }
     } catch (e) {
@@ -1037,6 +1178,8 @@ class XiaozhiService {
     try {
       final Map<String, dynamic> jsonData = json.decode(message);
       final String type = jsonData['type'] ?? '';
+      if (_screenStandby && ['tts', 'stt', 'llm', 'emotion'].contains(type))
+        return;
 
       // 确保首先调用消息监听器
       if (_messageListener != null) {
@@ -1055,6 +1198,7 @@ class XiaozhiService {
       // 根据消息类型分发事件
       switch (type) {
         case 'hello':
+          _mcpServer.resetSession();
           // 服务器下行音频参数（官方服务器TTS为24000Hz）
           final params = jsonData['audio_params'];
           if (params is Map && params['sample_rate'] is int) {
@@ -1062,12 +1206,16 @@ class XiaozhiService {
           }
           // 会话过期期间开口说的话，hello 后补发
           if (_inVoiceCall) {
+            if (voiceState.value == XiaozhiVoiceState.idle) {
+              voiceState.value = XiaozhiVoiceState.waiting;
+            }
             _flushPendingUtterance();
             _startAutoListen();
           }
           break;
 
         case 'goodbye':
+          unawaited(RobotMotionController.instance.stop());
           if (_inVoiceCall) {
             // 会话超时结束：不立即重新握手（否则空闲时每分钟被服务器踢一次），
             // 下次开口时 _beginUtterance 会先缓存音频再握手
@@ -1096,19 +1244,27 @@ class XiaozhiService {
           final String text = jsonData['text'] ?? '';
 
           if (state == 'start') {
-            // 机器人开始说话：暂停上传麦克风
+            replyText.value = '';
+            final keepListening = _motionAudioPolicy.beginTts(
+              RobotMotionController.instance.moving.value,
+            );
+            // While wheels move, silence TTS so stop commands remain audible.
             _autoStreaming = false;
             _drainToken++;
             AudioUtil.beginReply();
             _resumeListenTimer?.cancel();
             _replyTimeout?.cancel();
-            _micGateOpen = false;
+            _micGateOpen = keepListening;
             if (_utteranceActive) {
               // 机器人主动说话时放弃当前语句
               _utteranceActive = false;
               _vad.reset();
             }
-            voiceState.value = XiaozhiVoiceState.speaking;
+            voiceState.value =
+                keepListening
+                    ? XiaozhiVoiceState.waiting
+                    : XiaozhiVoiceState.speaking;
+            if (keepListening) _startAutoListen();
           } else if (state == 'stop') {
             // _muteReply 保持到下一句真实识别结果：abort 之后服务器常常
             // 还会接着说“Tạm biệt nhé!”之类的告别语，也不能播出来
@@ -1122,29 +1278,28 @@ class XiaozhiService {
             final stopAt = DateTime.now();
             final left = AudioUtil.remainingPlayback;
             AudioUtil.whenPlaybackDrained().then((_) {
-              print('$TAG: 播放排空用时 '
-                  '${DateTime.now().difference(stopAt).inMilliseconds}ms'
-                  '（tts stop 时估计剩余 ${left.inMilliseconds}ms）');
+              print(
+                '$TAG: 播放排空用时 '
+                '${DateTime.now().difference(stopAt).inMilliseconds}ms'
+                '（tts stop 时估计剩余 ${left.inMilliseconds}ms）',
+              );
               if (token != _drainToken) return;
               // Keep the reply's expression while its buffered audio plays.
               emotion.value = 'neutral';
               _resumeListenTimer?.cancel();
-              _resumeListenTimer = Timer(
-                const Duration(milliseconds: 700),
-                () {
-                  if (token != _drainToken) return;
-                  if (inCall && _inVoiceCall) {
-                    _resumeWaiting();
-                  } else if (voiceState.value ==
-                      XiaozhiVoiceState.speaking) {
-                    voiceState.value = XiaozhiVoiceState.idle;
-                  }
-                },
-              );
+              _resumeListenTimer = Timer(const Duration(milliseconds: 700), () {
+                if (token != _drainToken) return;
+                if (inCall && _inVoiceCall) {
+                  _resumeWaiting();
+                } else if (voiceState.value == XiaozhiVoiceState.speaking) {
+                  voiceState.value = XiaozhiVoiceState.idle;
+                }
+              });
             });
           }
 
           if (state == 'sentence_start' && text.isNotEmpty && !_muteReply) {
+            replyText.value = text;
             print('$TAG: 收到TTS句子: $text');
             _dispatchEvent(
               XiaozhiServiceEvent(XiaozhiServiceEventType.textMessage, text),
@@ -1155,6 +1310,9 @@ class XiaozhiService {
         case 'stt':
           // 处理语音识别结果
           final String text = jsonData['text'] ?? '';
+          if (RobotMotionController.isEmergencyStop(text)) {
+            unawaited(RobotMotionController.instance.stop());
+          }
           if (isNoiseHallucination(text)) {
             // 服务器 ASR 把背景噪声“听”成了视频片尾语：中断回答，继续等待
             print('$TAG: 忽略噪声幻听识别结果: $text');
@@ -1179,6 +1337,10 @@ class XiaozhiService {
               XiaozhiServiceEvent(XiaozhiServiceEventType.userMessage, text),
             );
           }
+          break;
+
+        case 'mcp':
+          unawaited(_handleMcp(jsonData['payload'], _sessionId));
           break;
 
         case 'llm':

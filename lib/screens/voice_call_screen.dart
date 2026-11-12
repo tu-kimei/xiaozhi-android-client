@@ -1,10 +1,17 @@
+import '../utils/audio_util.dart';
+import '../services/standby/call_standby_controller.dart';
 import '../widgets/voice_state_chip.dart';
 import '../widgets/face_view.dart';
 import '../services/face_controller.dart';
 import '../utils/pcm_stream_player.dart';
+import '../widgets/visbot_face_view.dart';
+import '../services/robot_gestures.dart';
+import '../services/robot_conversation_motion.dart';
+import '../services/robot_motion_controller.dart';
+import '../services/robot_preferences.dart';
+import '../services/robot_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:provider/provider.dart';
 import 'package:ai_assistant/models/conversation.dart';
 import 'package:ai_assistant/models/message.dart';
@@ -41,6 +48,11 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
   final List<double> _audioLevels = List.filled(30, 0.05);
   Timer? _audioVisualizerTimer;
   late FaceController _faceController;
+  late RobotConversationMotion _conversationMotion;
+  late RobotGestures _robotGestures;
+  late CallStandbyController _standby;
+  String? _standbyError;
+  String _faceStyle = 'simple';
   bool _faceEnabled = true;
   bool _showControls = true;
   Timer? _faceOverlayTimer;
@@ -48,6 +60,7 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
   @override
   void initState() {
     super.initState();
+    unawaited(RobotService.keepScreenOn(true));
 
     // 获取XiaozhiService实例
     _xiaozhiService = XiaozhiService(
@@ -64,6 +77,28 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
       emotionListenable: _xiaozhiService.emotion,
       playbackActiveListenable: PcmStreamPlayer.playbackActive,
     );
+    _robotGestures = RobotGestures(
+      face: _faceController,
+      replyText: _xiaozhiService.replyText,
+      motion: RobotMotionController.instance,
+      preferences: RobotPreferences.instance,
+    );
+    _conversationMotion = RobotConversationMotion(
+      face: _faceController,
+      motion: RobotMotionController.instance,
+      preferences: RobotPreferences.instance,
+    );
+    _standby = CallStandbyController(
+      preferences: RobotPreferences.instance,
+      voice: _xiaozhiService.voiceState,
+      playback: PcmStreamPlayer.playbackActive,
+      frames: AudioUtil.frameStream,
+      setStandby: _xiaozhiService.setScreenStandby,
+    );
+    _xiaozhiService.onSleepRequested = _standby.requestSleep;
+    _standby.addListener(_standbyChanged);
+    unawaited(RobotPreferences.instance.load());
+    RobotPreferences.instance.addListener(_syncFacePreference);
     _loadFacePreference();
 
     // 设置状态栏为透明并使图标为白色
@@ -104,7 +139,9 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
     _connectToVoiceService();
     _startAudioVisualizer();
   }
+
   void _handleServerMessage(dynamic message) {
+    if (!mounted) return;
     // 处理服务器发来的消息
     if (message is Map<String, dynamic> && message['type'] == 'hello') {
       print('收到服务器hello消息: $message');
@@ -128,6 +165,14 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
 
   @override
   void dispose() {
+    unawaited(RobotService.keepScreenOn(false));
+    RobotPreferences.instance.removeListener(_syncFacePreference);
+    _xiaozhiService.onSleepRequested = null;
+    _standby.removeListener(_standbyChanged);
+    _standby.dispose();
+    _conversationMotion.dispose();
+    _robotGestures.dispose();
+    unawaited(RobotMotionController.instance.stop());
     // 切换回普通聊天模式
     _xiaozhiService.switchToChatMode();
     _callTimer?.cancel();
@@ -142,14 +187,31 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
     super.dispose();
   }
 
-  Future<void> _loadFacePreference() async {
-    final prefs = await SharedPreferences.getInstance();
-    if (mounted) {
-      setState(() {
-        _faceEnabled = prefs.getBool('face_enabled') ?? true;
-      });
-      _showControlsTemporarily();
+  void _standbyChanged() {
+    if (!mounted) return;
+    setState(() {});
+    if (_standby.error != null && _standby.error != _standbyError) {
+      _standbyError = _standby.error;
+      _showCustomSnackbar(
+        message: _standby.error!,
+        icon: Icons.bedtime_outlined,
+        iconColor: Colors.blueGrey,
+      );
     }
+  }
+
+  void _syncFacePreference() {
+    if (!mounted) return;
+    setState(() {
+      _faceEnabled = RobotPreferences.instance.faceEnabled;
+      _faceStyle = RobotPreferences.instance.faceStyle;
+    });
+  }
+
+  Future<void> _loadFacePreference() async {
+    await RobotPreferences.instance.load();
+    _syncFacePreference();
+    if (mounted) _showControlsTemporarily();
   }
 
   void _showControlsTemporarily() {
@@ -334,7 +396,7 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
     );
 
     return Scaffold(
-      backgroundColor: Theme.of(context).colorScheme.primary,
+      backgroundColor: Colors.black,
       extendBody: true,
       extendBodyBehindAppBar: true,
       appBar: AppBar(
@@ -361,218 +423,279 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
           ),
         ),
       ),
-      body: GestureDetector(
-        behavior: HitTestBehavior.translucent,
-        onTap: _showControlsTemporarily,
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            // 渐变背景
-            Container(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Theme.of(context).colorScheme.primary,
-                    Theme.of(context).colorScheme.primary.withOpacity(0.8),
-                    Theme.of(context).colorScheme.primary.withOpacity(0.6),
-                  ],
-                ),
-              ),
-            ),
-
-            // Khuôn mặt cảm xúc toàn màn hình (Việc 2)
-            Positioned.fill(
-              child: FaceView(
-                controller: _faceController,
-                enabled: _faceEnabled,
-                onTap: _showControlsTemporarily,
-              ),
-            ),
-
-            // Lớp điều khiển (avatar, trạng thái, nút) — ẩn sau 5 giây, chạm màn hình hiện lại
-            if (_showControls)
-              Positioned.fill(
-                child: MediaQuery.sizeOf(context).height < 480
-                    ? SafeArea(
-                        child: Padding(
-                          padding: const EdgeInsets.fromLTRB(48, 4, 8, 8),
-                          child: Column(
-                            children: [
-                              Text(
-                                widget.conversation.title,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(color: Colors.white, fontSize: 18),
-                              ),
-                              if (_isConnected)
-                                VoiceStateChip(state: _xiaozhiService.voiceState, onDark: true)
-                              else
-                                Text(_statusText, style: const TextStyle(color: Colors.white)),
-                              const Spacer(),
-                              Text(_formatDuration(_callDuration), style: const TextStyle(color: Colors.white)),
-                              const SizedBox(height: 4),
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  _buildEndCallButton(),
-                                  const SizedBox(width: 32),
-                                  _buildControlButton(
-                                    icon: Icons.pan_tool,
-                                    color: Colors.white,
-                                    backgroundColor: Colors.orange,
-                                    onPressed: _sendAbortMessage,
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ),
-                      )
-                    : Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      // 圆形头像
-                      Hero(
-                        tag: 'avatar_${widget.conversation.id}',
-                        child: Container(
-                          width: 120,
-                          height: 120,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withOpacity(0.3),
-                                blurRadius: 15,
-                                spreadRadius: 2,
-                              ),
-                            ],
-                            gradient: LinearGradient(
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
-                              colors: [
-                                Theme.of(
-                                  context,
-                                ).colorScheme.primary.withOpacity(0.9),
-                                Theme.of(context).colorScheme.primaryContainer,
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 24),
-
-                      // 名称显示
-                      Text(
-                        widget.conversation.title,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 28,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-
-                      // 状态显示 - 使用拟物化样式
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 8,
-                        ),
-                        decoration: BoxDecoration(
-                          color:
-                              _isConnected
-                                  ? Colors.green.withOpacity(0.2)
-                                  : Colors.red.withOpacity(0.2),
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(
-                            color:
-                                _isConnected
-                                    ? Colors.green.withOpacity(0.6)
-                                    : Colors.red.withOpacity(0.6),
-                            width: 1,
-                          ),
-                          boxShadow: [
-                            BoxShadow(
-                              color:
-                                  _isConnected
-                                      ? Colors.green.withOpacity(0.2)
-                                      : Colors.red.withOpacity(0.2),
-                              blurRadius: 8,
-                              spreadRadius: 0,
-                            ),
-                          ],
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              _isConnected ? Icons.check_circle : Icons.error_outline,
-                              color: _isConnected ? Colors.green : Colors.red,
-                              size: 16,
-                            ),
-                            const SizedBox(width: 8),
-                            // 已连接时显示机器人是否正在听
-                            _isConnected
-                                ? Flexible(
-                                  child: VoiceStateChip(
-                                    state: _xiaozhiService.voiceState,
-                                    onDark: true,
-                                  ),
-                                )
-                                : Text(
-                                  _statusText,
-                                  style: const TextStyle(
-                                    color: Colors.red,
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                                ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-
-                      // 通话时长
-                      Text(
-                        'Thời gian gọi: ${_formatDuration(_callDuration)}',
-                        style: TextStyle(
-                          color: Colors.white.withOpacity(0.8),
-                          fontSize: 16,
-                        ),
-                      ),
-                      const SizedBox(height: 40),
-
-                      // 音频可视化
-                      _buildAudioVisualizer(),
-                      const SizedBox(height: 60),
-
-                      // 通话控制按钮
-                      Padding(
-                        padding: EdgeInsets.only(
-                          bottom: MediaQuery.of(context).padding.bottom + 20,
-                        ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            _buildEndCallButton(),
-                            const SizedBox(width: 40),
-                            _buildControlButton(
-                              icon: Icons.pan_tool, // 改为手掌图标表示打断
-                              color: Colors.white,
-                              backgroundColor: Colors.orange,
-                              onPressed: _sendAbortMessage,
-                            ),
-                          ],
-                        ),
-                      ),
+      body: Listener(
+        onPointerDown: (_) => _standby.activity(),
+        child: GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onTap: _showControlsTemporarily,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              // 渐变背景
+              Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Theme.of(context).colorScheme.primary,
+                      Theme.of(context).colorScheme.primary.withOpacity(0.8),
+                      Theme.of(context).colorScheme.primary.withOpacity(0.6),
                     ],
                   ),
                 ),
               ),
-          ],
+
+              // Khuôn mặt cảm xúc toàn màn hình (Việc 2)
+              Positioned.fill(
+                child:
+                    _faceEnabled && _faceStyle == 'visbot'
+                        ? VisbotFaceView(
+                          controller: _faceController,
+                          onTap: _showControlsTemporarily,
+                        )
+                        : FaceView(
+                          controller: _faceController,
+                          enabled: _faceEnabled,
+                          onTap: _showControlsTemporarily,
+                        ),
+              ),
+
+              // Lớp điều khiển (avatar, trạng thái, nút) — ẩn sau 5 giây, chạm màn hình hiện lại
+              if (_showControls)
+                Positioned.fill(
+                  child:
+                      MediaQuery.sizeOf(context).height < 480
+                          ? SafeArea(
+                            child: Padding(
+                              padding: const EdgeInsets.fromLTRB(48, 4, 8, 8),
+                              child: Column(
+                                children: [
+                                  Text(
+                                    widget.conversation.title,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 18,
+                                    ),
+                                  ),
+                                  if (_isConnected)
+                                    VoiceStateChip(
+                                      state: _xiaozhiService.voiceState,
+                                      onDark: true,
+                                    )
+                                  else
+                                    Text(
+                                      _statusText,
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                  const Spacer(),
+                                  Text(
+                                    _formatDuration(_callDuration),
+                                    style: const TextStyle(color: Colors.white),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      _buildEndCallButton(),
+                                      const SizedBox(width: 32),
+                                      _buildControlButton(
+                                        icon: Icons.bedtime_outlined,
+                                        color: Colors.white,
+                                        backgroundColor: Colors.blueGrey,
+                                        onPressed:
+                                            () => unawaited(
+                                              _standby.sleep(manual: true),
+                                            ),
+                                      ),
+                                      const SizedBox(width: 12),
+                                      _buildControlButton(
+                                        icon: Icons.pan_tool,
+                                        color: Colors.white,
+                                        backgroundColor: Colors.orange,
+                                        onPressed: _sendAbortMessage,
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                          )
+                          : Center(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                // 圆形头像
+                                Hero(
+                                  tag: 'avatar_${widget.conversation.id}',
+                                  child: Container(
+                                    width: 120,
+                                    height: 120,
+                                    decoration: BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.black.withOpacity(0.3),
+                                          blurRadius: 15,
+                                          spreadRadius: 2,
+                                        ),
+                                      ],
+                                      gradient: LinearGradient(
+                                        begin: Alignment.topLeft,
+                                        end: Alignment.bottomRight,
+                                        colors: [
+                                          Theme.of(context).colorScheme.primary
+                                              .withOpacity(0.9),
+                                          Theme.of(
+                                            context,
+                                          ).colorScheme.primaryContainer,
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 24),
+
+                                // 名称显示
+                                Text(
+                                  widget.conversation.title,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 28,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+
+                                // 状态显示 - 使用拟物化样式
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 16,
+                                    vertical: 8,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color:
+                                        _isConnected
+                                            ? Colors.green.withOpacity(0.2)
+                                            : Colors.red.withOpacity(0.2),
+                                    borderRadius: BorderRadius.circular(20),
+                                    border: Border.all(
+                                      color:
+                                          _isConnected
+                                              ? Colors.green.withOpacity(0.6)
+                                              : Colors.red.withOpacity(0.6),
+                                      width: 1,
+                                    ),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color:
+                                            _isConnected
+                                                ? Colors.green.withOpacity(0.2)
+                                                : Colors.red.withOpacity(0.2),
+                                        blurRadius: 8,
+                                        spreadRadius: 0,
+                                      ),
+                                    ],
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(
+                                        _isConnected
+                                            ? Icons.check_circle
+                                            : Icons.error_outline,
+                                        color:
+                                            _isConnected
+                                                ? Colors.green
+                                                : Colors.red,
+                                        size: 16,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      // 已连接时显示机器人是否正在听
+                                      _isConnected
+                                          ? Flexible(
+                                            child: VoiceStateChip(
+                                              state: _xiaozhiService.voiceState,
+                                              onDark: true,
+                                            ),
+                                          )
+                                          : Text(
+                                            _statusText,
+                                            style: const TextStyle(
+                                              color: Colors.red,
+                                              fontSize: 16,
+                                              fontWeight: FontWeight.w500,
+                                            ),
+                                          ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(height: 12),
+
+                                // 通话时长
+                                Text(
+                                  'Thời gian gọi: ${_formatDuration(_callDuration)}',
+                                  style: TextStyle(
+                                    color: Colors.white.withOpacity(0.8),
+                                    fontSize: 16,
+                                  ),
+                                ),
+                                const SizedBox(height: 40),
+
+                                // 音频可视化
+                                _buildAudioVisualizer(),
+                                const SizedBox(height: 60),
+
+                                // 通话控制按钮
+                                Padding(
+                                  padding: EdgeInsets.only(
+                                    bottom:
+                                        MediaQuery.of(context).padding.bottom +
+                                        20,
+                                  ),
+                                  child: Row(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      _buildEndCallButton(),
+                                      const SizedBox(width: 40),
+                                      _buildControlButton(
+                                        icon: Icons.bedtime_outlined,
+                                        color: Colors.white,
+                                        backgroundColor: Colors.blueGrey,
+                                        onPressed:
+                                            () => unawaited(
+                                              _standby.sleep(manual: true),
+                                            ),
+                                      ),
+                                      const SizedBox(width: 12),
+                                      _buildControlButton(
+                                        icon: Icons.pan_tool, // 改为手掌图标表示打断
+                                        color: Colors.white,
+                                        backgroundColor: Colors.orange,
+                                        onPressed: _sendAbortMessage,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                ),
+              if (_standby.sleeping)
+                const Positioned.fill(child: ColoredBox(color: Colors.black)),
+              if (_standby.transitioning && !_standby.sleeping)
+                const Positioned.fill(
+                  child: ColoredBox(
+                    color: Color(0xB3000000),
+                    child: Center(child: CircularProgressIndicator()),
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
     );
@@ -729,11 +852,7 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
       behavior: SnackBarBehavior.floating,
       backgroundColor: Colors.black87,
       duration: const Duration(seconds: 3),
-      margin: EdgeInsets.only(
-        bottom: MediaQuery.of(context).size.height - 120,
-        left: 16,
-        right: 16,
-      ),
+      margin: const EdgeInsets.all(12),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       elevation: 8,
     );

@@ -151,6 +151,9 @@ class XiaozhiMqttManager {
     client.setProtocolV311();
 
     client.onDisconnected = _onDisconnected;
+    // autoReconnect bypasses onDisconnected in mqtt_client. Surface the loss
+    // immediately so the shared service cancels hardware work before reconnect.
+    client.onAutoReconnect = _onDisconnected;
     client.onAutoReconnected = _onAutoReconnected;
 
     _client = client;
@@ -232,6 +235,7 @@ class XiaozhiMqttManager {
     _sessionId = null;
     _subscribeAll();
     _sendHello();
+    _dispatchEvent(XiaozhiEvent(type: XiaozhiEventType.connected, data: null));
   }
 
   void _sendHello() {
@@ -260,6 +264,9 @@ class XiaozhiMqttManager {
   }
 
   /// 发送原始 JSON（发布到 device-server）
+  static MqttClientPayloadBuilder buildPayload(String message) =>
+      MqttClientPayloadBuilder()..addUTF8String(message);
+
   void sendMessage(String message) {
     final c = _client;
     if (c == null || !_isConnected) {
@@ -268,7 +275,7 @@ class XiaozhiMqttManager {
     }
     final topic = _publishTopic ?? 'device-server';
     try {
-      final builder = MqttClientPayloadBuilder()..addString(message);
+      final builder = buildPayload(message);
       c.publishMessage(topic, MqttQos.atMostOnce, builder.payload!);
       print('$TAG: >> [$topic] $message');
     } catch (e) {

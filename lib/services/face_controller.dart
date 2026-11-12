@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:ai_assistant/services/xiaozhi_service.dart';
 
@@ -27,6 +28,56 @@ class FaceController extends ChangeNotifier {
   bool _isSpeaking = false;
   bool _isListening = false;
   bool _isThinking = false;
+  Timer? _idleTimer;
+  int _idleLook = 0;
+  String? _localEmotion;
+  Timer? _localEmotionTimer;
+
+  bool get isIdle =>
+      !_isSpeaking &&
+      (voiceStateListenable.value == XiaozhiVoiceState.waiting ||
+          voiceStateListenable.value == XiaozhiVoiceState.idle);
+
+  String get visbotEmotion {
+    if (_isListening)
+      return 'default'; // Keep the calm listening face preferred on this robot.
+    if (_isThinking) return 'doubt';
+    if (isIdle && _idleLook != 0)
+      return _idleLook.isOdd ? 'lookleft' : 'lookright';
+    return mapVisbotEmotion(_localEmotion ?? emotionListenable.value);
+  }
+
+  void showEmotion(
+    String emotion, {
+    Duration duration = const Duration(seconds: 3),
+  }) {
+    _localEmotion = emotion.trim().toLowerCase();
+    _localEmotionTimer?.cancel();
+    _localEmotionTimer = Timer(duration, () {
+      _localEmotion = null;
+      _onStateChanged();
+    });
+    _onStateChanged();
+  }
+
+  static String mapVisbotEmotion(String emotion) => switch (emotion
+      .trim()
+      .toLowerCase()) {
+    'happy' => 'happy',
+    'relaxed' => 'enjoy',
+    'laughing' || 'funny' || 'silly' => 'funny',
+    'loving' || 'kissy' => 'love',
+    'winking' || 'cool' || 'confident' => 'confidence',
+    'embarrassed' => 'shy',
+    'sad' => 'frustrated',
+    'crying' => 'cry',
+    'angry' => 'mad',
+    'surprised' || 'shocked' => 'surprised',
+    'thinking' || 'confused' => 'doubt',
+    'sleepy' => 'fatigue',
+    'delicious' => 'desire',
+    _ => 'default',
+  };
 
   FaceController({
     required this.voiceStateListenable,
@@ -37,6 +88,14 @@ class FaceController extends ChangeNotifier {
     emotionListenable.addListener(_onStateChanged);
     playbackActiveListenable.addListener(_onStateChanged);
     _recompute();
+    _idleTimer = Timer.periodic(const Duration(seconds: 12), (_) {
+      if (!isIdle) {
+        _idleLook = 0;
+        return;
+      }
+      _idleLook = (_idleLook + 1) % 3;
+      notifyListeners();
+    });
   }
 
   RobotFaceEmotion get currentEmotion => _currentEmotion;
@@ -51,7 +110,9 @@ class FaceController extends ChangeNotifier {
 
   void _recompute() {
     final vState = voiceStateListenable.value;
-    final rawEmotion = emotionListenable.value.toLowerCase().trim();
+    final rawEmotion =
+        (_localEmotion ?? emotionListenable.value).toLowerCase().trim();
+    if (!isIdle) _idleLook = 0;
 
     _isSpeaking = playbackActiveListenable.value;
     _isListening = !_isSpeaking && vState == XiaozhiVoiceState.listening;
@@ -81,6 +142,7 @@ class FaceController extends ChangeNotifier {
       case 'happy':
       case 'laughing':
       case 'funny':
+      case 'silly':
       case 'loving':
       case 'kissy':
       case 'confident':
@@ -123,6 +185,8 @@ class FaceController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _idleTimer?.cancel();
+    _localEmotionTimer?.cancel();
     voiceStateListenable.removeListener(_onStateChanged);
     emotionListenable.removeListener(_onStateChanged);
     playbackActiveListenable.removeListener(_onStateChanged);

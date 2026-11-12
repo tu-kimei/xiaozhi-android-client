@@ -31,6 +31,9 @@ class PcmStreamPlayer(messenger: BinaryMessenger) : MethodChannel.MethodCallHand
     @Volatile private var running = true
     @Volatile private var writtenFrames = 0L
     private var underruns = 0
+    private var outputSampleRate = 24000
+    private val envelope = PlaybackEnvelope()
+    private var lastLevel = 0.0
 
     // Observe output progress without taking the writer lock or touching its
     // queue. TTS start / feed only means audio is pending, not yet audible.
@@ -56,6 +59,11 @@ class PcmStreamPlayer(messenger: BinaryMessenger) : MethodChannel.MethodCallHand
             val advanced = t != null && t === observedTrack && head != 0 && head != lastHead
             if (advanced) lastAdvanceAt = now
             setPlaybackActive(playing && (advanced || (playbackActive && now - lastAdvanceAt < 80)))
+            val level = if (playbackActive) envelope.levelAt(head.toLong().and(0xffffffffL)) else 0.0
+            if (kotlin.math.abs(level - lastLevel) >= 0.015 || (level == 0.0 && lastLevel != 0.0)) {
+                lastLevel = level
+                channel.invokeMethod("playbackLevel", level)
+            }
             observedTrack = t
             lastHead = head
             if (queue.isNotEmpty() || playbackActive || now - lastFeedAt < 500) {
@@ -87,6 +95,9 @@ class PcmStreamPlayer(messenger: BinaryMessenger) : MethodChannel.MethodCallHand
         lastHead = 0
         lastAdvanceAt = 0L
         setPlaybackActive(false)
+        envelope.clear()
+        lastLevel = 0.0
+        channel.invokeMethod("playbackLevel", 0.0)
     }
 
     private val writer = Thread({
@@ -116,6 +127,8 @@ class PcmStreamPlayer(messenger: BinaryMessenger) : MethodChannel.MethodCallHand
             synchronized(lock) {
                 val t = track ?: return@synchronized
                 var offset = 0
+                if (t.playState != AudioTrack.PLAYSTATE_PLAYING) envelope.clear()
+                envelope.append(data, if (t.playState == AudioTrack.PLAYSTATE_PLAYING) writtenFrames else 0L, outputSampleRate)
                 if (t.playState != AudioTrack.PLAYSTATE_PLAYING) {
                     writtenFrames = 0L
                     // Prime the buffer before starting, otherwise the track
@@ -176,6 +189,7 @@ class PcmStreamPlayer(messenger: BinaryMessenger) : MethodChannel.MethodCallHand
 
     private fun initialize(sampleRate: Int) {
         release()
+        outputSampleRate = sampleRate
         val minBuf = AudioTrack.getMinBufferSize(
             sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT
         )
@@ -197,6 +211,7 @@ class PcmStreamPlayer(messenger: BinaryMessenger) : MethodChannel.MethodCallHand
             .setTransferMode(AudioTrack.MODE_STREAM)
             .build()
         synchronized(lock) {
+            envelope.clear()
             track = t
             writtenFrames = 0L
             underruns = 0
@@ -212,6 +227,7 @@ class PcmStreamPlayer(messenger: BinaryMessenger) : MethodChannel.MethodCallHand
             track?.let {
                 it.pause()
                 it.flush()
+                envelope.clear()
                 writtenFrames = 0L
                 it.play()
             }
@@ -229,6 +245,7 @@ class PcmStreamPlayer(messenger: BinaryMessenger) : MethodChannel.MethodCallHand
                 }
                 it.release()
             }
+            envelope.clear()
             track = null
             writtenFrames = 0L
         }

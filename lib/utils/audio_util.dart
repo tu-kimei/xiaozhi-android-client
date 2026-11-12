@@ -18,7 +18,8 @@ class VoiceFrame {
   final Uint8List opus;
   final double db;
   final double voicing;
-  const VoiceFrame(this.opus, this.db, this.voicing);
+  final Uint8List? pcm;
+  const VoiceFrame(this.opus, this.db, this.voicing, {this.pcm});
 }
 
 /// 音频工具类，用于处理Opus音频编解码和录制播放
@@ -87,18 +88,23 @@ class AudioUtil {
   /// 新一段 TTS 开始：开头先攒 [_startPrebuffer] 再播放
   static void beginReply() {
     // 新的一段回答：从干净的队列开始（上一段若有卡住的 future 不再阻塞）
-    _playChain = Future.value().then((_) async {
-      if (_jitter.length == 0) {
-        _buffering = true;
-        _prebuffer = _startPrebuffer;
-      }
-      // 播放器可能在离开/重进通话时被释放：开口前确保可用
-      if (!_isPlayerInitialized || _pcmPlayer == null) {
-        await initPlayer();
-      }
-    }).timeout(const Duration(seconds: 3), onTimeout: () {
-      print('$TAG: 播放队列卡住，重置');
-    });
+    _playChain = Future.value()
+        .then((_) async {
+          if (_jitter.length == 0) {
+            _buffering = true;
+            _prebuffer = _startPrebuffer;
+          }
+          // 播放器可能在离开/重进通话时被释放：开口前确保可用
+          if (!_isPlayerInitialized || _pcmPlayer == null) {
+            await initPlayer();
+          }
+        })
+        .timeout(
+          const Duration(seconds: 3),
+          onTimeout: () {
+            print('$TAG: 播放队列卡住，重置');
+          },
+        );
   }
 
   /// 等待已收到的音频全部解码写入并播放完毕（含排队中的包）
@@ -241,9 +247,9 @@ class AudioUtil {
 
   /// 确保播放器可用；已初始化则什么都不做
   static Future<void> initPlayer() => _serial(() async {
-        if (_isPlayerInitialized && _pcmPlayer != null) return;
-        await _initPlayerImpl();
-      });
+    if (_isPlayerInitialized && _pcmPlayer != null) return;
+    await _initPlayerImpl();
+  });
 
   static Future<void> _initPlayerImpl() async {
     // 确保任何旧播放器被释放
@@ -270,12 +276,13 @@ class AudioUtil {
     final gen = _playGen;
     // 单帧最多 2s：任何一次初始化/写入卡住都不能让后面所有音频永远排队
     _playChain = _playChain.then(
-      (_) => gen != _playGen
-          ? Future<void>.value() // 已被 stopPlaying 打断
-          : _playOpusFrame(opusData).timeout(
-        const Duration(seconds: 2),
-        onTimeout: () => print('$TAG: 播放一帧超时，跳过'),
-      ),
+      (_) =>
+          gen != _playGen
+              ? Future<void>.value() // 已被 stopPlaying 打断
+              : _playOpusFrame(opusData).timeout(
+                const Duration(seconds: 2),
+                onTimeout: () => print('$TAG: 播放一帧超时，跳过'),
+              ),
     );
     return _playChain;
   }
@@ -293,9 +300,10 @@ class AudioUtil {
       // 所以显式给出一帧（60ms）的采样数。
       final Int16List pcmData;
       try {
-        pcmData = opusData.isEmpty
-            ? _decoder.decode(loss: _outputSampleRate * 60 ~/ 1000)
-            : _decoder.decode(input: opusData);
+        pcmData =
+            opusData.isEmpty
+                ? _decoder.decode(loss: _outputSampleRate * 60 ~/ 1000)
+                : _decoder.decode(input: opusData);
       } catch (e) {
         // 单帧解码失败只丢这一帧；不要停播放器（会清空已缓冲的音频）
         print('$TAG: 解码失败，跳过一帧: $e');
@@ -524,6 +532,7 @@ class AudioUtil {
                       opusData,
                       VoiceActivityDetector.frameDb(frame),
                       VoiceActivityDetector.voicing(frame),
+                      pcm: frame,
                     ),
                   );
                 }

@@ -195,41 +195,54 @@ class RosaClient(private val context: Context) {
     }
 
     fun rotate(option: RotationOption, listener: ResponseListener?): CallHandle {
-        val session = competitionSession(listOf(CompetingItem("servo", "servo-${option.servoId}")))
+        return rotateSeries(listOf(option), listener)
+    }
+
+    fun rotateSeries(options: List<RotationOption>, listener: ResponseListener?): CallHandle {
+        require(options.isNotEmpty())
+        val session = competitionSession(options.map { CompetingItem("servo", "servo-${it.servoId}") }.distinct())
         return call(
             service = "servo",
             path = "/servo/rotate",
             sticky = true,
             param = parcelableParam(ROTATION_OPTION_LIST) { p ->
-                p.writeInt(1)
-                p.writeInt(1)
-                p.writeString(option.servoId)
-                p.writeFloat(option.angle)
-                p.writeByte(if (option.angleAbsolute) 1 else 0)
-                p.writeLong(option.durationMs)
-                p.writeFloat(option.speed)
+                p.writeInt(options.size)
+                options.forEach { option ->
+                    p.writeInt(1)
+                    p.writeString(option.servoId)
+                    p.writeFloat(option.angle)
+                    p.writeByte(if (option.angleAbsolute) 1 else 0)
+                    p.writeLong(option.durationMs)
+                    p.writeFloat(option.speed)
+                }
             },
             session = session,
             listener = listener,
         )
     }
 
-    fun locomote(option: LocomotionOption, listener: ResponseListener?): CallHandle {
+    fun locomote(option: LocomotionOption, listener: ResponseListener?): CallHandle =
+        locomoteSeries(listOf(option), listener)
+
+    fun locomoteSeries(options: List<LocomotionOption>, listener: ResponseListener?): CallHandle {
+        require(options.isNotEmpty())
         return call(
             service = "locomotion",
             path = "/locomotor/locomote",
             sticky = true,
             param = parcelableParam(LOCOMOTION_OPTION_LIST) { p ->
-                p.writeInt(1)
-                p.writeInt(1)
-                p.writeFloat(option.movingSpeed)
-                p.writeFloat(option.movingAngle)
-                p.writeFloat(option.movingDistance)
-                p.writeFloat(option.turningSpeed)
-                p.writeFloat(option.turningAngle)
-                p.writeInt(option.turningAxis)
-                p.writeLong(option.durationMs)
-                p.writeByte(if (option.emergency) 1 else 0)
+                p.writeInt(options.size)
+                options.forEach { option ->
+                    p.writeInt(1)
+                    p.writeFloat(option.movingSpeed)
+                    p.writeFloat(option.movingAngle)
+                    p.writeFloat(option.movingDistance)
+                    p.writeFloat(option.turningSpeed)
+                    p.writeFloat(option.turningAngle)
+                    p.writeInt(option.turningAxis)
+                    p.writeLong(option.durationMs)
+                    p.writeByte(if (option.emergency) 1 else 0)
+                }
             },
             session = competitionSession(LOCOMOTION_COMPETING_ITEMS),
             listener = listener,
