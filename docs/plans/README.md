@@ -6,7 +6,8 @@ Ba việc, mỗi việc một file, viết để một agent khác có thể nh�
 |---|------|------|-----------|
 | 1 | Điều khiển robot bằng lời nói + cử chỉ tự động | [2026-11-08-voice-robot-control.md](2026-11-08-voice-robot-control.md) | — (xây nền MCP dùng chung) |
 | 2 | Màn hình khuôn mặt cảm xúc | [2026-11-08-emotion-face.md](2026-11-08-emotion-face.md) | Có thể làm song song với 1 |
-| 3 | Gia sư tiếng Anh: giáo trình + kiến trúc nội dung | _(đang trao đổi, sẽ bổ sung)_ | Cần MCP của việc 1; dùng mặt cười của việc 2 |
+| 3 | Gia sư tiếng Anh: Tutor Service (VPS) + Web UI bố mẹ + client trên robot | [2026-11-08-english-tutor.md](2026-11-08-english-tutor.md) | Cần MCP của việc 1; dùng mặt cười của việc 2 |
+| 4 | Thiết kế camera vision một-shot an toàn | [2026-11-12-visbot-camera-vision.md](2026-11-12-visbot-camera-vision.md) | Cần probe camera thật trên Visbot trước khi triển khai |
 
 Thứ tự đề xuất: **1 (phần MCP) → 2 song song → 3**.
 

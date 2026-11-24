@@ -12,6 +12,7 @@ import 'package:ai_assistant/widgets/settings_section.dart';
 import 'package:ai_assistant/services/dify_service.dart';
 import 'package:ai_assistant/services/xiaozhi_ota_service.dart';
 import 'package:ai_assistant/screens/xiaozhi_activation_screen.dart';
+import 'package:ai_assistant/screens/vision_camera_screen.dart';
 import '../widgets/robot_settings_panel.dart';
 
 // 引入main.dart中定义的常量
@@ -205,6 +206,14 @@ class _SettingsScreenState extends State<SettingsScreen>
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            ListTile(
+              leading: const Icon(Icons.camera_alt_outlined),
+              title: const Text('Camera phụ huynh — thử nghiệm cục bộ'),
+              subtitle: const Text('PIN riêng; không upload ảnh hoặc gọi AI'),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const VisionCameraScreen()),
+              ),
+            ),
             _buildCard(
               title: 'Giao diện',
               subtitle: 'Tùy chỉnh giao diện ứng dụng',
